@@ -123,6 +123,8 @@ tasks.register('cmakeConfigure', Exec) {
     commandLine 'cmake',
             '-S', projectDir.absolutePath,
             '-B', nativeBuildDir.get().asFile.absolutePath,
+            '-G', 'Visual Studio 18 2026',
+            '-A', 'x64',
             "-DOXC_DIST=${distDir.get().asFile.absolutePath}"
 }
 
