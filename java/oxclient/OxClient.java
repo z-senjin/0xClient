@@ -76,7 +76,10 @@ public final class OxClient {
             new oxclient.plugins.AutoLogin(),
             // Anti-idle: a camera-key tap every few minutes so the server does not log the account
             // out (seen live 2026-09-06). Off by default; appended after AutoLogin (positional indices).
-            new oxclient.plugins.AntiIdle()
+            new oxclient.plugins.AntiIdle(),
+            // MntnChopper: nearest tree, chop, drop logs when full, repeat. Off by default; appended
+            // last (positional indices).
+            new oxclient.plugins.MntnChopper()
     ));
 
     // The overlay image, reused between frames. Reallocating eight megabytes thirty times a second

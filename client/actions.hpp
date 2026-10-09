@@ -13,7 +13,8 @@
 //
 // Off unless every ACT_* offset was measured for this build (the loader zeroes an unmeasured code RVA);
 // OXC_ACTIONS=0 turns it off by hand. Seen working in game on client-241-3 (2026-10-09): walk and NPC
-// options sent this way matched the client's own clicks argument for argument and took effect. Every
+// options sent this way matched the client's own clicks argument for argument and took effect; object
+// options (tree chopping) and item options (inventory Drop, option 7) worked the same day. Every
 // action that is dropped says why, once, in the log; every action sent is logged.
 #pragma once
 #include <windows.h>
@@ -29,13 +30,14 @@
 namespace oxc {
 namespace actions {
 
-enum Kind : int { Walk = 1, Npc = 2, Loc = 3 };
+enum Kind : int { Walk = 1, Npc = 2, Loc = 3, IfOp = 4 };
 
 struct Act {
     int kind = 0;
     int a = 0, b = 0, c = 0;   // Walk: level, worldX, worldY   Npc: uid   Loc: level, worldX, worldY
-    int id = 0;                // Loc: object id
-    int op = 0;                // Npc/Loc: option 1..5
+                               // IfOp: widgetId, slot
+    int id = 0;                // Loc: object id   IfOp: item id
+    int op = 0;                // Npc/Loc: option 1..5   IfOp: option 1..10
 };
 
 struct Done {                  // what pump() did, for the DLL loop to log
@@ -64,6 +66,7 @@ inline State& st() {
 using WalkFn = void (*)(void*, int*);
 using NpcFn = void (*)(void*, std::uintptr_t, int, int);
 using LocFn = void (*)(void*, int, int*, int, int);
+using IfOpFn = void (*)(void*, int, int, int, int, int, char);
 
 // Runs on the game thread, from the tick breakpoint. One action per frame.
 inline void pump(CONTEXT*) {
@@ -85,6 +88,9 @@ inline void pump(CONTEXT*) {
     } else if (a.kind == Loc) {
         int args[6] = {a.a, a.b, a.c, a.id, a.op, 0};
         reinterpret_cast<LocFn>(base + off::ACT_LOC_OP)(nullptr, a.id, args, a.op, 0);
+    } else if (a.kind == IfOp) {
+        // {widget, slot, op, subop 0, item, flag 0} -- the menu-entry callback's own layout (offsets.hpp)
+        reinterpret_cast<IfOpFn>(base + off::ACT_IF_OP)(nullptr, a.a, a.b, a.op, 0, a.id, 0);
     }
     const std::uint32_t i = s.doneHead.load();
     s.done[i % kQueue] = d;
@@ -108,6 +114,14 @@ inline const char* unavailable() {
 }
 
 inline bool submit(const Act& a) {
+    if (a.kind == IfOp && !off::ACT_IF_OP) {
+        static bool warnedIf = false;
+        if (!warnedIf) {
+            warnedIf = true;
+            oxc::logf("[actions] dropped: ACT_IF_OP (item options) was not derived for this build\n");
+        }
+        return false;
+    }
     if (const char* why = unavailable()) {
         static bool warned = false;
         if (!warned) {
@@ -149,7 +163,8 @@ inline void tick() {
         const Act& a = d.act;
         if (a.kind == Walk) oxc::logf("[actions] walk to (%d,%d) plane %d: sent\n", a.b, a.c, a.a);
         else if (a.kind == Npc) oxc::logf("[actions] NPC uid %d option %d: %s\n", a.a, a.op, d.result > 0 ? "sent" : "not found, dropped");
-        else oxc::logf("[actions] object %d at (%d,%d) option %d: sent\n", a.id, a.b, a.c, a.op);
+        else if (a.kind == Loc) oxc::logf("[actions] object %d at (%d,%d) option %d: sent\n", a.id, a.b, a.c, a.op);
+        else oxc::logf("[actions] item %d in widget 0x%x slot %d option %d: sent\n", a.id, static_cast<unsigned>(a.a), a.b, a.op);
     }
 }
 
@@ -191,6 +206,34 @@ inline bool doAction(int sceneX, int sceneY, int opcode, int targetId) {
 /// Walk to a SCENE tile. The game pathfinds and sends the movement itself; we only say where.
 inline bool walkTo(int sceneX, int sceneY) {
     return doAction(sceneX, sceneY, off::OP_WALK, 0);
+}
+
+/// Take option `op` (1..5, as numbered in the object's right-click menu) on the scenery object `id`
+/// whose origin is SCENE tile (sceneX, sceneY) -- the same call a click on that option makes. Queued; false
+/// when dropped.
+inline bool objectAction(int sceneX, int sceneY, int id, int op) {
+    if (!clientObj() || op < 1 || op > 5 || id < 0) return false;
+    const Tile b = sceneBase();
+    if (!b.ok) return false;
+    bool meFound = false;
+    const Entity me = localPlayer(meFound);
+    actions::Act a;
+    a.kind = actions::Loc; a.a = meFound ? actions::planeOf(me) : 0; a.b = b.x + sceneX; a.c = b.y + sceneY;
+    a.id = id; a.op = op;
+    return actions::submit(a);
+}
+
+/// Take option `op` (1..10) on the item in `slot` of interface component `widgetId` ((group << 16) |
+/// component; the inventory is 149:0 = 0x950000), the way clicking that option on the item does.
+/// `itemId` is the item the caller expects there; the client sends it with the option and the server
+/// checks it. The client itself drops an option the slot does not offer (offsets.hpp, ACT_IF_OP).
+/// Returns true when QUEUED; false when dropped (ACT_IF_OP not measured, actions unavailable, bad
+/// arguments, full queue).
+inline bool itemAction(int widgetId, int slot, int op, int itemId) {
+    if (!clientObj() || slot < 0 || op < 1 || op > 10 || itemId < 0) return false;
+    actions::Act a;
+    a.kind = actions::IfOp; a.a = widgetId; a.b = slot; a.op = op; a.id = itemId;
+    return actions::submit(a);
 }
 
 /// Interact with an NPC by uid -- the NPC is looked up again on the game thread when the action runs,

@@ -42,6 +42,7 @@
 #include "log.hpp"
 #include "offsets.hpp"
 #include "offsets_json.hpp"
+#include "scenery.hpp"
 
 namespace oxc::selfcheck {
 
@@ -400,6 +401,39 @@ inline void checkGlobals(Results& r) {
     r.add({"RUN_ENERGY"}, (energy >= 0 && energy <= 10000) ? "plausible" : "fail", fmt("read %d (0..10000 expected)", energy));
 }
 
+// Scenery (scenery.hpp): a wrong grid or object layout finds nothing, because an object only counts
+// when its handle says "game object" AND its stored origin equals the tile it was listed on. Names: at
+// least one listed object's definition must be cached with a readable name.
+inline void checkScenery(Results& r, const Entity& me) {
+    int n = 0, named = 0, walls = 0, wallsNamed = 0, withOps = 0;
+    std::string sample, wallSample, opSample;
+    forEachLoc(me.plane >= 0 ? me.plane : 0, me.sceneX, me.sceneY, 25, [&](const Loc& l) {
+        const bool wall = l.layer == LOC_LAYER_WALL;
+        if (wall) ++walls; else ++n;
+        int& cnt = wall ? wallsNamed : named;
+        std::string& smp = wall ? wallSample : sample;
+        if (cnt < 3) {
+            const std::string nm = locName(l.id);
+            if (!nm.empty()) { ++cnt; smp += fmt("%s%d=%s", smp.empty() ? "" : ", ", l.id, nm.c_str()); }
+        }
+        if (withOps < 3) {
+            const auto ops = locOptions(l.id);
+            std::string joined;
+            for (const auto& o : ops) if (!o.empty()) joined += (joined.empty() ? "" : "/") + o;
+            if (!joined.empty()) { ++withOps; opSample += fmt("%s%d:%s", opSample.empty() ? "" : ", ", l.id, joined.c_str()); }
+        }
+    });
+    r.add({"SCENE_GRID", "GRID_DIM_X", "GRID_DIM_Y", "GRID_TILES", "TILE_OBJ_COUNT", "TILE_OBJS", "LOC_HANDLE", "LOC_X", "LOC_Y"},
+          n >= 3 ? "pass" : "fail", fmt("%d game objects within 25 tiles (none is only right in an empty area)", n));
+    r.add({"LOCDEF_CACHE", "LOCDEF_NAME"}, named > 0 ? "pass" : "fail",
+          named > 0 ? sample : std::string("no listed object had a readable cached name"));
+    // A wrong wall slot or handle gives ids whose definitions are not cached (no names), or no walls.
+    // An area with no walls at all is possible, so none is a skip, not a failure.
+    r.add({"TILE_WALL", "WALL_HANDLE"}, walls == 0 ? "skip" : wallsNamed > 0 ? "pass" : "fail",
+          fmt("%d walls within 25 tiles; named: %s", walls, wallSample.empty() ? "none" : wallSample.c_str()));
+    r.add({"LOCDEF_OPS"}, withOps > 0 ? "pass" : "fail", withOps > 0 ? opSample : std::string("no listed object had a readable option"));
+}
+
 // ---------------------------------------------------------------------------------------------------
 // The report
 // ---------------------------------------------------------------------------------------------------
@@ -474,7 +508,13 @@ public:
         // itself may be wrong, and the check should run and say so.
         bool f2 = false;
         const Entity me = localPlayer(f2);
-        const bool rendered = f2 && rd<std::int32_t>(me.addr + off::ENTITY_FINE_X) != 0;
+        // The camera too: one live report (2026-10-09) was taken while it still sat at its login-screen
+        // position (-404480,-405504), ~3000 tiles away, and failed every camera and projection check
+        // that had passed on the run before. Wait for it to come within the orbit distance of you.
+        const std::uintptr_t c = clientObj();
+        const int camX = rd<std::int32_t>(c + off::CAMERA_FINE_X), camY = rd<std::int32_t>(c + off::CAMERA_FINE_Y);
+        const bool camHere = f2 && std::abs(camX - me.fineX) < 40 * 128 && std::abs(camY - me.fineY) < 40 * 128;
+        const bool rendered = f2 && rd<std::int32_t>(me.addr + off::ENTITY_FINE_X) != 0 && camHere;
         if (!rendered && now - settledSince_ < 60000) return;
         done_ = true;
         // The checks sleep (the cycle check waits a second) and retry torn reads, so they run on their
@@ -496,9 +536,10 @@ public:
         checkCameraAndProjection(r, me, canvas);
         checkWidgets(r, canvas);
         checkGlobals(r);
+        checkScenery(r, me);
         r.add({"DO_ACTION", "OPLOC1", "OPNPC1", "OPNPC2", "OPNPC3", "OPNPC4", "OPNPC5", "OP_WALK",
                "PENDING_ACTION_PACKED_ID", "PENDING_ACTION_INDEX", "PENDING_ACTION_TARGET", "PENDING_ACTION_SEQ",
-               "PENDING_ACTION_PENDING"},
+               "PENDING_ACTION_PENDING", "ACT_IF_OP"},
               "skip", "not checkable by reading: needs a hook-and-log against a real click");
         write(dllDir, r);
     }

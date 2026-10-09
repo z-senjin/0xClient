@@ -127,13 +127,35 @@ inline std::uintptr_t DO_ACTION = 0;   // SUPERSEDED by the ACT_* senders below;
 // its argument block). VERIFIED LIVE 2026-10-09 (client-241-3, a second hook-and-log run): the client's
 // own clicks passed walk {plane, x, y}, NPC {uid, option, 0} and object {plane, x, y, id, option, 0}, and
 // doAction's walk and NPC options -- same layouts, flag 0 -- were sent from ACT_TICK and acted on in game.
-// The object sender's layout matched a real click; doAction has not yet sent one itself.
+// The object sender: VERIFIED LIVE 2026-10-09 as well -- MntnChopper's OPLOC1 on tree 1276 was sent
+// from ACT_TICK and the character chopped it.
 // 0 = not derived for this build: the loader refuses an unmeasured code RVA, and every action is
 // dropped (and says so) rather than calling a stale address.
 inline std::uintptr_t ACT_TICK   = 0;
 inline std::uintptr_t ACT_WALK   = 0;
 inline std::uintptr_t ACT_NPC_OP = 0;
 inline std::uintptr_t ACT_LOC_OP = 0;
+
+// The inventory-item / interface-button sender: what a click on an item's option (Drop, Eat, Wield...)
+// calls. Same rules as the senders above: called with the client's own argument layout, on the game
+// thread, from ACT_TICK.
+//
+//   ACT_IF_OP   void ifOp(void*, int widgetId, int slot, int op, int subop, int itemId, char flag)
+//               widgetId = (group << 16) | component -- the inventory is 149:0 = 0x950000;
+//               slot = the item's index in the container; op 1..10; subop 0; flag 0.
+//
+// It checks the slot's server-sent option mask before sending -- `call <ifFlags>(client, widgetId, slot)`
+// then `sar eax,cl` with cl = op-1 and `test al,1` -- so an option the slot does not have is dropped by
+// the client itself, never sent.
+// HOW FOUND (client-241-3, 2026-10-09, static): its two callers are menu-entry callbacks that unpack
+// {widget, slot, op, subop, item, flag} from their argument block (0x38d360) or from a widget
+// (0x38d390: [w+4], [w+8], R8 op, 0, [w+0xb38], [w+0x34]) and call it. It starts packet 0x26
+// ({widget, slot, item, op}), or 0x42 when subop != 0. AUTOMATED (DeriveOffsets.java, derive3): the
+// only packet sender that starts exactly two packets and shifts the mask by CL (`SAR EAX,CL`).
+// VERIFIED LIVE 2026-10-09 (client-241-3): MntnChopper sent {0x950000, slot, 7, 0, 1511, 0} for slots
+// 18..27 from ACT_TICK and every log was dropped -- so option 7 IS Drop on the inventory. A wrong option
+// is refused by the mask check above rather than doing something else.
+inline std::uintptr_t ACT_IF_OP  = 0;
 
 // The client's world->screen projection leaf. Takes {fineX, fineY, fineZ} and writes {screenX, screenY}.
 // "Fine" coordinates are tiles << 7 (i.e. 128 units per tile). It reads the camera out of the client
@@ -466,6 +488,72 @@ inline std::uintptr_t SCENE_NPC_UID_COUNT = 0xD8;  // field on the scene object
 // right after loading the scene pointer is the base (seven sites each on 241-3).
 inline std::uintptr_t SCENE_BASE_X = 0x24;
 inline std::uintptr_t SCENE_BASE_Y = 0x28;
+
+// ---------------------------------------------------------------------------------------------------
+// SCENERY ("locs": trees, rocks, doors) -- client/scenery.hpp
+// ---------------------------------------------------------------------------------------------------
+// The scene object holds a pointer to its TILE GRID. A tile is found by
+//     grid = *(scene + SCENE_GRID)
+//     idx  = (level * dimX + localX) * dimY + localY        dimX = grid+GRID_DIM_X, dimY = grid+GRID_DIM_Y
+//     tile = *(*(grid + GRID_TILES) + idx*16 + 8)           (level -1, a bridge's underside, uses +0x980)
+// and a tile lists its game objects (the big locs -- trees, rocks, furniture) as
+//     n = *(int*)(tile + TILE_OBJ_COUNT);  entries = *(tile + TILE_OBJS), 16 bytes each, object at +8
+// A game object carries a 64-bit HANDLE at LOC_HANDLE and its ORIGIN tile (south-west corner, local
+// scene coordinates) at LOC_X / LOC_Y. A multi-tile object is listed on every tile it covers; it is
+// counted once, on the tile equal to its origin. Handle decode (constants below): loc id =
+// (h >> LOC_ID_SHIFT) & 0xFFFF; kind = (h >> LOC_KIND_SHIFT) & 7, and kind 2 is a game object (the
+// client's own "is game object" test is exactly kind == 2). The shifts are constants in scenery.hpp.
+//
+// HOW FOUND (client-241-3, 2026-10-09, static): the Lua binding loc_find (its leaf references "Could not
+// find supplied coord's world instance in loc_find.") subtracts the world view's base (+0x24/+0x28 --
+// SCENE_BASE_X/Y, so the world view IS the scene object) from the coordinate, then calls the tile probe
+// 0x6a2cb0 with `mov rcx,[view+0x10]` (SCENE_GRID). The probe indexes `imul [rcx+0x948]`,
+// `imul [rcx+0x94c]`, `mov rax,[rcx+0x968]`, `mov r8,[r8+rax+8]`; it falls through to 0x6a2b80, which
+// walks `movsxd rax,[tile+0x34]` entries of `[tile+0x38]` (stride 0x10, object at +8) and matches
+// `[obj+0x1f0]` (handle, kind 2 via 0x652110) and `[obj+0x210]` / `[obj+0x218]` against the tile.
+// AUTOMATED (DeriveOffsets.java, derive4): every number is read off those two functions' instructions.
+// VERIFIED LIVE 2026-10-09 (client-241-3): the self-check listed 221 game objects within 25 tiles, each
+// one's origin equal to the tile it was listed on, and MntnChopper found and chopped trees with them.
+inline std::uintptr_t SCENE_GRID      = 0x10;   // field on the scene object (pointer)
+inline std::uintptr_t GRID_DIM_X      = 0x948;  // field on the grid (int)
+inline std::uintptr_t GRID_DIM_Y      = 0x94C;  // field on the grid (int)
+inline std::uintptr_t GRID_TILES      = 0x968;  // field on the grid (pointer to 16-byte entries)
+inline std::uintptr_t TILE_OBJ_COUNT  = 0x34;   // field on a tile (int)
+inline std::uintptr_t TILE_OBJS       = 0x38;   // field on a tile (pointer to 16-byte entries)
+inline std::uintptr_t LOC_HANDLE      = 0x1F0;  // field on a game object (u64)
+inline std::uintptr_t LOC_X           = 0x210;  // field on a game object (int, local)
+inline std::uintptr_t LOC_Y           = 0x218;  // field on a game object (int, local)
+
+// A tile's WALL slot (doors, fences, walls -- loc layer 0) and the handle on a wall object. The tile
+// probe 0x6a2cb0 tests three single-object slots before the game-object list and reports which matched
+// as the layer: [tile+0x110] -> 1 (wall decoration), [tile+0x108] -> 0 (wall), [tile+0x118] -> 3
+// (ground decoration), each through `mov rcx,[slot]; mov rcx,[rcx+0x38]; call <id decoder>`. A wall has
+// no origin field: it belongs to the tile it sits on. AUTOMATED (derive4): the slot and handle loads
+// in the branch that ends `mov word ptr [rbx],0x100`. NOT VERIFIED LIVE.
+inline std::uintptr_t TILE_WALL       = 0x108;  // field on a tile (pointer to a wall object)
+inline std::uintptr_t WALL_HANDLE     = 0x38;   // field on a wall object (u64 handle)
+
+// The loc DEFINITION cache: a hash map from loc id to its definition, kept by the client's own getter
+// (0x5ed080 on 241-3: `mov r8d,[COUNT]; div; mov r8,[BUCKETS]; mov rdx,[r8+rax*8]` then
+// `cmp rdi,[rdx]` / `mov rdx,[rdx+0x40]`). LOCDEF_CACHE is the GLOBAL holding the bucket array; the
+// bucket count is the dword right after it (+8). A node is {u64 id, ctrl, def, ..., next at +0x40}; the
+// slot one past the last bucket is the end marker. The definition's NAME is an NxtString at
+// LOCDEF_NAME (the menu builder 0x3836d0 formats "<col=00FFFF>" + [def+0x40], with the string's
+// length/flag byte at +0x57). Read only, never inserted into: a loc that is on screen has been looked
+// up by the menu and the renderer, so its definition is cached; a miss just means "name unknown".
+// HOW FOUND as above (static, 2026-10-09). AUTOMATED (derive4): the getter is the call right after the
+// tile probe in loc_find; the two RIP-relative loads in its first instructions are the count and the
+// buckets. VERIFIED LIVE 2026-10-09: the self-check read "Staircase" and "Candles" for listed objects,
+// and MntnChopper matched trees by the name "Tree".
+inline std::uintptr_t LOCDEF_CACHE    = 0;      // global (rva of the bucket-array pointer)
+inline std::uintptr_t LOCDEF_NAME     = 0x40;   // field on a loc definition (NxtString)
+// The definition's OPTIONS ("Chop down", "Bank", "Open"): a vector {begin, end} of 0x40-byte entries,
+// entry i = option i+1, its text an NxtString at the entry's start (+0x18 holds conditional overrides,
+// ignored here). HOW FOUND (static, 2026-10-09): the menu builder 0x3836d0 does `add r12,0xe8; mov
+// rcx,r12` and hands it to 0x5e6330 / 0x5e63b0, which index it as `sar rax,6` / `shl rsi,6` and return
+// the entry. AUTOMATED (derive4): that ADD after the name read, handed to a 0x40-stride helper.
+// NOT VERIFIED LIVE.
+inline std::uintptr_t LOCDEF_OPS      = 0xE8;   // field on a loc definition (vector of 0x40-byte entries)
 
 // ---------------------------------------------------------------------------------------------------
 // FIELDS ON AN ENTITY (a player or an NPC)

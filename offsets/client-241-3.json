@@ -1,7 +1,7 @@
 {
   "build": "241-3",
   "sha256": "166231c8f6bd05c7542b8f0d35eb64b0aad701a87ba6ba41f60c4706de946944",
-  "derived": "2026-10-09T14:37:46Z",
+  "derived": "2026-10-09T16:16:46Z",
   "source": "DeriveOffsets.java",
   "notes": "DO_ACTION candidate for a hook-and-log run: rva 0x372870 is the widget-menu action path (its args are a packed widget id and a component index, NOT scene x/y) | packet-start function rva 0x6795c0 (77 call sites)",
   "offsets": {
@@ -54,10 +54,19 @@
     },
     "ACT_LOC_OP": {
       "value": 3702000,
-      "status": "derived",
+      "status": "verified",
       "kind": "code",
       "evidence": "the only packet sender that starts five different packets and switches on the option in R9D: rva 0x387cf0",
-      "plausible": "hook-and-log 2026-10-09: the client's own Open on a door passed {plane 1, x 3207, y 3222, id 1543, option 1, flag 0} -- the layout doAction builds; not yet sent by doAction itself"
+      "verified_on": "2026-10-09",
+      "verification": "live 2026-10-09: MntnChopper's doAction OPLOC1 on tree 1276 (e.g. at 3195,3220) was sent from ACT_TICK and the character chopped the tree"
+    },
+    "ACT_IF_OP": {
+      "value": 3724240,
+      "status": "verified",
+      "kind": "code",
+      "evidence": "the only packet sender that starts exactly two packets and shifts the slot's option mask by CL (SAR EAX,CL): rva 0x38d3d0",
+      "verified_on": "2026-10-09",
+      "verification": "live 2026-10-09: itemAction(0x950000 inventory, slots 18..27, option 7, item 1511) was sent from ACT_TICK and each log was dropped"
     },
     "WORLD_TO_SCREEN": {
       "value": 2222976,
@@ -83,8 +92,7 @@
       "status": "derived",
       "kind": "field",
       "evidence": "21ebab  MOV EDI,dword ptr [R15 + 0x895cc]",
-      "previous": 562652,
-      "plausible": "self-check 2026-10-09: camera height -2539 (negative is up)"
+      "previous": 562652
     },
     "CAMERA_FINE_Y": {
       "value": 562640,
@@ -101,7 +109,7 @@
       "kind": "field",
       "evidence": "worldToScreenCoord calls the view getter 6ccf70  MOV RAX,qword ptr [RCX + 0x90]",
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: both scale pairs read the canvas size 1298x861"
+      "verification": "self-check 2026-10-09: both scale pairs read the canvas size 807x861"
     },
     "VIEW_OBJ_SCALE_BASE": {
       "value": 16,
@@ -109,7 +117,7 @@
       "kind": "field",
       "evidence": "and passes view+this to the rescale: 21ec6f  LEA RCX,[RAX + 0x10]",
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: both scale pairs read the canvas size 1298x861"
+      "verification": "self-check 2026-10-09: both scale pairs read the canvas size 807x861"
     },
     "VIEW_IN_W": {
       "value": 32,
@@ -117,7 +125,7 @@
       "kind": "field",
       "evidence": "rescale divisor for x: 61aa38  MOVD XMM0,dword ptr [RCX + 0x20]",
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: both scale pairs read the canvas size 1298x861"
+      "verification": "self-check 2026-10-09: both scale pairs read the canvas size 807x861"
     },
     "VIEW_IN_H": {
       "value": 36,
@@ -125,7 +133,7 @@
       "kind": "field",
       "evidence": "rescale divisor for y: 61aa69  MOVD XMM0,dword ptr [RCX + 0x24]",
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: both scale pairs read the canvas size 1298x861"
+      "verification": "self-check 2026-10-09: both scale pairs read the canvas size 807x861"
     },
     "VIEW_OUT_W": {
       "value": 92,
@@ -133,7 +141,7 @@
       "kind": "field",
       "evidence": "rescale numerator for x: 61aa30  MOVD XMM2,dword ptr [RCX + 0x5c]",
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: both scale pairs read the canvas size 1298x861"
+      "verification": "self-check 2026-10-09: both scale pairs read the canvas size 807x861"
     },
     "VIEW_OUT_H": {
       "value": 96,
@@ -141,7 +149,7 @@
       "kind": "field",
       "evidence": "rescale numerator for y: 61aa72  MOVD XMM2,dword ptr [RCX + 0x60]",
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: both scale pairs read the canvas size 1298x861"
+      "verification": "self-check 2026-10-09: both scale pairs read the canvas size 807x861"
     },
     "SCENE": {
       "value": 51840,
@@ -160,7 +168,7 @@
       "evidence": "playerFindSelf leaf: 3a82b8  MOV EDI,dword ptr [RDI + 0xcc4c]",
       "previous": 52316,
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 2 handles PLAYER_IDS lists, yours included"
+      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 1 handles PLAYER_IDS lists, yours included"
     },
     "PLAYER_COUNT": {
       "value": 52432,
@@ -169,7 +177,7 @@
       "evidence": "the player-list walk reads the count: 0616fd  MOVSXD R12,dword ptr [R13 + 0xccd0]",
       "previous": 52448,
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 2 handles PLAYER_IDS lists, yours included"
+      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 1 handles PLAYER_IDS lists, yours included"
     },
     "PLAYER_IDS": {
       "value": 52436,
@@ -178,7 +186,7 @@
       "evidence": "takes the inline id array right after it: 06170d  LEA R15,[R13 + 0xccd4], and looks each id up in the player table: 061725  MOV ECX,dword ptr [R14 + 0x70]",
       "previous": 52452,
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 2 handles PLAYER_IDS lists, yours included"
+      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 1 handles PLAYER_IDS lists, yours included"
     },
     "SKILL_EFFECTIVE": {
       "value": 13136,
@@ -187,7 +195,7 @@
       "evidence": "getStatEffectiveLevel leaf reads the array: 0f5828  MOV EAX,dword ptr [RCX + RAX*0x4 + 0x3350]",
       "previous": 13152,
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: 25 of 25 skills read their base level as effective"
+      "verification": "self-check 2026-10-09: 24 of 25 skills read their base level as effective"
     },
     "SKILL_BASE": {
       "value": 13236,
@@ -270,7 +278,7 @@
       "kind": "field",
       "evidence": "getMapOrigin leaf: 3a315b  MOV RCX,qword ptr [RAX + 0x49a8]",
       "previous": 18872,
-      "plausible": "self-check 2026-10-09: world map object 000002526CA58BC0"
+      "plausible": "self-check 2026-10-09: world map object 000001D4070D49C0"
     },
     "WM_ORIGIN_LEVEL": {
       "value": 21688,
@@ -308,7 +316,7 @@
       "status": "derived",
       "kind": "global",
       "evidence": "getVarp leaf: 0f5900  MOV RAX,qword ptr [0x14155e528]",
-      "plausible": "self-check 2026-10-09: 156 of the first 4000 varps nonzero"
+      "plausible": "self-check 2026-10-09: 158 of the first 4000 varps nonzero"
     },
     "GET_VARBIT": {
       "value": 5956400,
@@ -388,7 +396,7 @@
       "evidence": "getNpcIdAll leaf walks the group heads: 3ad4d6  MOV RDX,qword ptr [RAX + 0xc9d8]",
       "previous": 51688,
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 2 handles PLAYER_IDS lists, yours included"
+      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 1 handles PLAYER_IDS lists, yours included"
     },
     "REGISTRY_GROUP_COUNT": {
       "value": 51680,
@@ -397,7 +405,7 @@
       "evidence": "getNpcIdAll leaf bounds the walk: 3ad50d  MOV RAX,qword ptr [RAX + 0xc9e0]",
       "previous": 51696,
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 2 handles PLAYER_IDS lists, yours included"
+      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 1 handles PLAYER_IDS lists, yours included"
     },
     "REGISTRY_GROUP_SEL": {
       "value": 52304,
@@ -412,7 +420,7 @@
       "kind": "field",
       "evidence": "and returns the group's table pair: 0ec447  MOV RAX,qword ptr [RCX + 0x10]",
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 2 handles PLAYER_IDS lists, yours included"
+      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 1 handles PLAYER_IDS lists, yours included"
     },
     "GROUP_NEXT": {
       "value": 24,
@@ -420,7 +428,7 @@
       "kind": "field",
       "evidence": "registry group lookup (rva 0xec3d0) walks the chain: 0ec405  MOV RAX,qword ptr [RAX + 0x18]",
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 2 handles PLAYER_IDS lists, yours included"
+      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 1 handles PLAYER_IDS lists, yours included"
     },
     "PLAYER_BUCKETS": {
       "value": 104,
@@ -428,7 +436,7 @@
       "kind": "field",
       "evidence": "player-table lookup rva 0xea980 (called with LOCAL_PLAYER_IDX by playerFindSelf's resolver): 0ea984  MOV R10,qword ptr [RCX + 0x68]",
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 2 handles PLAYER_IDS lists, yours included"
+      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 1 handles PLAYER_IDS lists, yours included"
     },
     "PLAYER_BUCKET_COUNT": {
       "value": 112,
@@ -436,7 +444,7 @@
       "kind": "field",
       "evidence": "player-table lookup rva 0xea980 (called with LOCAL_PLAYER_IDX by playerFindSelf's resolver): 0ea980  MOV R8D,dword ptr [RCX + 0x70]",
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 2 handles PLAYER_IDS lists, yours included"
+      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 1 handles PLAYER_IDS lists, yours included"
     },
     "NPC_BUCKETS": {
       "value": 152,
@@ -444,7 +452,7 @@
       "kind": "field",
       "evidence": "npcName's group walk rva 0x1878b0: 18794d  MOV R9,qword ptr [R8 + 0x98]",
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: the registry's NPC table holds exactly the 24 uids the scene lists"
+      "verification": "self-check 2026-10-09: the registry's NPC table holds exactly the 6 uids the scene lists"
     },
     "NPC_BUCKET_COUNT": {
       "value": 160,
@@ -452,7 +460,7 @@
       "kind": "field",
       "evidence": "npcName's group walk rva 0x1878b0: 187946  MOV ECX,dword ptr [R8 + 0xa0]",
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: the registry's NPC table holds exactly the 24 uids the scene lists"
+      "verification": "self-check 2026-10-09: the registry's NPC table holds exactly the 6 uids the scene lists"
     },
     "NODE_UID": {
       "value": 0,
@@ -460,7 +468,7 @@
       "kind": "field",
       "evidence": "player-table lookup rva 0xea980 (called with LOCAL_PLAYER_IDX by playerFindSelf's resolver) compares the uid with [node]: 0ea9a0  CMP R9D,dword ptr [RAX]",
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 2 handles PLAYER_IDS lists, yours included"
+      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 1 handles PLAYER_IDS lists, yours included"
     },
     "NODE_ENTITY": {
       "value": 16,
@@ -468,7 +476,7 @@
       "kind": "field",
       "evidence": "player-table lookup rva 0xea980 (called with LOCAL_PLAYER_IDX by playerFindSelf's resolver) returns the entity: 0ea9bb  MOV RAX,qword ptr [RAX + 0x10]",
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 2 handles PLAYER_IDS lists, yours included"
+      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 1 handles PLAYER_IDS lists, yours included"
     },
     "NODE_NEXT": {
       "value": 24,
@@ -476,7 +484,7 @@
       "kind": "field",
       "evidence": "player-table lookup rva 0xea980 (called with LOCAL_PLAYER_IDX by playerFindSelf's resolver) walks the bucket chain: 0ea9a5  MOV RAX,qword ptr [RAX + 0x18]",
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 2 handles PLAYER_IDS lists, yours included"
+      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 1 handles PLAYER_IDS lists, yours included"
     },
     "SCENE_NPC_UIDS": {
       "value": 208,
@@ -484,7 +492,7 @@
       "kind": "field",
       "evidence": "getNpcIdAll leaf reads the uid array: 3ad560  MOV RAX,qword ptr [RBP + 0xd0]",
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: the registry's NPC table holds exactly the 24 uids the scene lists"
+      "verification": "self-check 2026-10-09: the registry's NPC table holds exactly the 6 uids the scene lists"
     },
     "SCENE_NPC_UID_COUNT": {
       "value": 216,
@@ -492,7 +500,7 @@
       "kind": "field",
       "evidence": "and its count: 3ad5a3  CMP ESI,dword ptr [RBP + 0xd8]",
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: the registry's NPC table holds exactly the 24 uids the scene lists"
+      "verification": "self-check 2026-10-09: the registry's NPC table holds exactly the 6 uids the scene lists"
     },
     "SCENE_BASE_X": {
       "value": 36,
@@ -510,13 +518,119 @@
       "verified_on": "2026-10-09",
       "verification": "self-check 2026-10-09: scene corner (3160,3168): in the world and chunk-aligned"
     },
+    "SCENE_GRID": {
+      "value": 16,
+      "status": "verified",
+      "kind": "field",
+      "evidence": "loc_find passes the world view's grid to the tile probe: 3af1b1  MOV RCX,qword ptr [R10 + 0x10]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: 221 game objects within 25 tiles (none is only right in an empty area)"
+    },
+    "GRID_DIM_X": {
+      "value": 2376,
+      "status": "verified",
+      "kind": "field",
+      "evidence": "the tile probe multiplies the level by it (once): rva 0x6a2cb0",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: 221 game objects within 25 tiles (none is only right in an empty area)"
+    },
+    "GRID_DIM_Y": {
+      "value": 2380,
+      "status": "verified",
+      "kind": "field",
+      "evidence": "the tile probe multiplies by it on both paths: rva 0x6a2cb0",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: 221 game objects within 25 tiles (none is only right in an empty area)"
+    },
+    "GRID_TILES": {
+      "value": 2408,
+      "status": "verified",
+      "kind": "field",
+      "evidence": "the tile array the probe indexes on the level path: 6a2d02  MOV RAX,qword ptr [RCX + 0x968]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: 221 game objects within 25 tiles (none is only right in an empty area)"
+    },
+    "TILE_OBJ_COUNT": {
+      "value": 52,
+      "status": "verified",
+      "kind": "field",
+      "evidence": "the object walk's entry count: 6a2c30  MOVSXD RAX,dword ptr [R8 + 0x34]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: 221 game objects within 25 tiles (none is only right in an empty area)"
+    },
+    "TILE_OBJS": {
+      "value": 56,
+      "status": "verified",
+      "kind": "field",
+      "evidence": "the object walk's entry array: 6a2c38  MOV R8,qword ptr [R8 + 0x38]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: 221 game objects within 25 tiles (none is only right in an empty area)"
+    },
+    "LOC_HANDLE": {
+      "value": 496,
+      "status": "verified",
+      "kind": "field",
+      "evidence": "the handle the object walk tests for kind 2: 6a2c54  MOV RCX,qword ptr [R9 + 0x1f0]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: 221 game objects within 25 tiles (none is only right in an empty area)"
+    },
+    "LOC_X": {
+      "value": 528,
+      "status": "verified",
+      "kind": "field",
+      "evidence": "the object's origin x, compared against the tile: 6a2c64  CMP dword ptr [R9 + 0x210],ESI",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: 221 game objects within 25 tiles (none is only right in an empty area)"
+    },
+    "LOC_Y": {
+      "value": 536,
+      "status": "verified",
+      "kind": "field",
+      "evidence": "the object's origin y, compared against the tile: 6a2c6d  CMP dword ptr [R9 + 0x218],EDI",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: 221 game objects within 25 tiles (none is only right in an empty area)"
+    },
+    "TILE_WALL": {
+      "value": 264,
+      "status": "derived",
+      "kind": "field",
+      "evidence": "the tile probe's layer-0 (wall) slot: 6a2d55  MOV RCX,qword ptr [R8 + 0x108]"
+    },
+    "WALL_HANDLE": {
+      "value": 56,
+      "status": "derived",
+      "kind": "field",
+      "evidence": "the wall's handle, read before the id test: 6a2d61  MOV RCX,qword ptr [RCX + 0x38]"
+    },
+    "LOCDEF_CACHE": {
+      "value": 13773360,
+      "status": "verified",
+      "kind": "global",
+      "evidence": "the loc definition getter (called after the tile probe in loc_find) loads its cache's buckets, count at +8: 5ed09f  MOV R8,qword ptr [0x140d22a30]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: 16672=Staircase, 16672=Staircase, 202=Candles"
+    },
+    "LOCDEF_NAME": {
+      "value": 64,
+      "status": "verified",
+      "kind": "field",
+      "evidence": "the first NxtString the loc menu builders read off the definition after fetching it (1 sites, next 0)",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: 16672=Staircase, 16672=Staircase, 202=Candles"
+    },
+    "LOCDEF_OPS": {
+      "value": 232,
+      "status": "derived",
+      "kind": "field",
+      "evidence": "the loc menu builder hands def+N to the option helpers (0x40-byte entries) right after reading the name"
+    },
     "ENTITY_SCENE_X": {
       "value": 1008,
       "status": "verified",
       "kind": "field",
       "evidence": "npcCoord leaf reads it into the result's x slot: 3ae56d  MOV EAX,dword ptr [RSI + 0x3f0]",
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 2 handles PLAYER_IDS lists, yours included"
+      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 1 handles PLAYER_IDS lists, yours included"
     },
     "ENTITY_SCENE_Y": {
       "value": 1048,
@@ -524,7 +638,7 @@
       "kind": "field",
       "evidence": "npcCoord leaf reads it into the result's y slot: 3ae576  MOV EAX,dword ptr [RSI + 0x418]",
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 2 handles PLAYER_IDS lists, yours included"
+      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 1 handles PLAYER_IDS lists, yours included"
     },
     "ENTITY_FINE_H": {
       "value": 504,
@@ -532,8 +646,7 @@
       "kind": "field",
       "since": "241-1",
       "since_status": "derived",
-      "evidence": "not derived on 241-3; value last derived on 241-1: dword both coordinate leaves read below the scene coords: the render height (fine x/y follow at +4/+8)",
-      "plausible": "self-check 2026-10-09: ground height -464"
+      "evidence": "not derived on 241-3; value last derived on 241-1: dword both coordinate leaves read below the scene coords: the render height (fine x/y follow at +4/+8)"
     },
     "ENTITY_FINE_X": {
       "value": 616,
@@ -542,7 +655,7 @@
       "evidence": "npcCoordFine reads x through the entity's coordinate object: 3ae7cd  LEA RCX,[RBP + 0x260] then a getter of +0x8",
       "previous": 508,
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: render position (7088,5568) sits on scene tile (55,44)"
+      "verification": "self-check 2026-10-09: render position (6208,6976) sits on scene tile (48,54)"
     },
     "ENTITY_FINE_Y": {
       "value": 620,
@@ -551,24 +664,22 @@
       "evidence": "and y: 3ae7d9  LEA RCX,[RBP + 0x260] then a getter of +0xc",
       "previous": 512,
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: render position (7088,5568) sits on scene tile (55,44)"
+      "verification": "self-check 2026-10-09: render position (6208,6976) sits on scene tile (48,54)"
     },
     "ENTITY_PLANE": {
       "value": 1056,
       "status": "suspect",
       "kind": "field",
-      "since": "240-6",
-      "since_status": "suspect",
       "evidence": "not derived on 241-3; value last suspect on 240-6: compiled default (client/offsets.hpp): SUSPECT: this build points at 0x7CC instead",
-      "inference": "the nearest derived entity fields on both sides (0x418, 0x710) did not move, so this one most likely did not either",
-      "verification": "FAILED self-check 2026-10-09: read 44"
+      "verification": "FAILED self-check 2026-10-09: read 44",
+      "plausible": "self-check 2026-10-09: read 0"
     },
     "ENTITY_PLANE_COORD": {
       "value": 1944,
       "status": "derived",
       "kind": "field",
       "evidence": "the one dword the coord leaf reads off the entity that npcCoord does not (its level)",
-      "plausible": "self-check 2026-10-09: read 0"
+      "plausible": "self-check 2026-10-09: read 1"
     },
     "ENTITY_DEF_PTR": {
       "value": 1840,
@@ -609,7 +720,7 @@
       "evidence": "one-instruction getter 084e30  MOV RAX,qword ptr [RCX + 0x413bd8] whose result is passed to the widget lookup at rva 0x5af750",
       "previous": 4275176,
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: 38 of 973 groups loaded, 1998 components"
+      "verification": "self-check 2026-10-09: 37 of 973 groups loaded, 1900 components"
     },
     "IFACE_GROUP_COUNT": {
       "value": 26760,
@@ -618,7 +729,7 @@
       "evidence": "widget lookup bounds the group id: 5af76d  CMP RAX,qword ptr [RCX + 0x6888]",
       "previous": 26112,
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: 38 of 973 groups loaded, 1998 components"
+      "verification": "self-check 2026-10-09: 37 of 973 groups loaded, 1900 components"
     },
     "IFACE_GROUP_ARRAY": {
       "value": 26768,
@@ -627,7 +738,7 @@
       "evidence": "widget lookup indexes the group array: 5af77d  MOV RAX,qword ptr [RCX + 0x6890]",
       "previous": 26120,
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: 38 of 973 groups loaded, 1998 components"
+      "verification": "self-check 2026-10-09: 37 of 973 groups loaded, 1900 components"
     },
     "IFACE_GROUP_ENTRY_STRIDE": {
       "value": 24,
@@ -635,7 +746,7 @@
       "kind": "field",
       "evidence": "widget lookup scales the group index by 3 then 8: 5af776  LEA RDX,[RAX + RAX*0x2]",
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: 38 of 973 groups loaded, 1998 components"
+      "verification": "self-check 2026-10-09: 37 of 973 groups loaded, 1900 components"
     },
     "IFACE_GROUP_ENTRY_COUNT": {
       "value": 8,
@@ -643,7 +754,7 @@
       "kind": "field",
       "evidence": "widget lookup bounds the component index: 5af788  MOV RAX,qword ptr [RAX + RDX*0x8 + 0x8]",
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: 38 of 973 groups loaded, 1998 components"
+      "verification": "self-check 2026-10-09: 37 of 973 groups loaded, 1900 components"
     },
     "IFACE_GROUP_ENTRY_DATA": {
       "value": 16,
@@ -651,7 +762,7 @@
       "kind": "field",
       "evidence": "widget lookup reads the component array: 5af797  MOV RAX,qword ptr [RDI + 0x10]",
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: 38 of 973 groups loaded, 1998 components"
+      "verification": "self-check 2026-10-09: 37 of 973 groups loaded, 1900 components"
     },
     "IFACE_EMPTY_SENTINEL": {
       "value": 22406632,
@@ -698,7 +809,7 @@
       "status": "derived",
       "kind": "field",
       "evidence": "IfType registration rva 0x225f10 binds \"hidden\" to this offset (226bdf)",
-      "plausible": "self-check 2026-10-09: 1998 of 1998 hidden flags are 0/1"
+      "plausible": "self-check 2026-10-09: 1900 of 1900 hidden flags are 0/1"
     },
     "IFTYPE_CHILDREN_COUNT": {
       "value": 2896,
@@ -718,7 +829,7 @@
       "kind": "field",
       "evidence": "the \"text\" property's getter lambda after the IfType registration: 2281b0  MOVZX EAX,byte ptr [RCX + 0x16f]",
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: 112 components carry readable text"
+      "verification": "self-check 2026-10-09: 117 components carry readable text"
     },
     "IFTYPE_TEXT_FLAG": {
       "value": 367,
@@ -726,7 +837,7 @@
       "kind": "field",
       "evidence": "the same getter tests bit 7 of this byte (the NxtString heap flag)",
       "verified_on": "2026-10-09",
-      "verification": "self-check 2026-10-09: 112 components carry readable text"
+      "verification": "self-check 2026-10-09: 117 components carry readable text"
     },
     "IFTYPE_TEXT2": {
       "value": 368,
@@ -760,7 +871,7 @@
       "since_status": "verified",
       "evidence": "not derived on 241-3; value last verified on 240-6: compiled default (client/offsets.hpp): current animation id, -1 when idle",
       "inference": "the nearest derived entity fields on both sides (0x418, 0x710) did not move, so this one most likely did not either",
-      "plausible": "self-check 2026-10-09: 26 of 26 entities -1 or a sequence id"
+      "plausible": "self-check 2026-10-09: 7 of 7 entities -1 or a sequence id"
     },
     "ENTITY_ORIENTATION": {
       "value": 992,
@@ -769,16 +880,13 @@
       "since": "240-6",
       "since_status": "default",
       "evidence": "not derived on 241-3; value last default on 240-6: compiled default (client/offsets.hpp): 0..2047, 0 = south, rising clockwise",
-      "plausible": "self-check 2026-10-09: 26 of 26 entities in 0..2047, 23 nonzero"
+      "plausible": "self-check 2026-10-09: 7 of 7 entities in 0..2047, 5 nonzero"
     },
     "PLAYER_COMBAT_LEVEL": {
       "value": 1844,
       "status": "suspect",
       "kind": "field",
-      "since": "240-6",
-      "since_status": "default",
       "evidence": "not derived on 241-3; value last default on 240-6: compiled default (client/offsets.hpp): Combat level, on a PLAYER entity. NPCs keep theirs on the shared definition instead -- reading this on an NPC live returned a pointer fragment (the high half of a heap address), never a level. On the local player it read -1, so this offset is simply WRONG on client-240-6. NOT VERIFIED -- re-derive from the client's combat-level Lua binding before trusting any number that comes out of here.",
-      "inference": "the nearest derived entity fields on both sides (0x730, 0x798) did not move, so this one most likely did not either",
       "verification": "FAILED self-check 2026-10-09: read -1, your stats make 3"
     },
     "LOGIN_PASSWORD_DELTA": {

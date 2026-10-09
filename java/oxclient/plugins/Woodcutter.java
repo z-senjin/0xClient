@@ -33,10 +33,9 @@ import oxclient.ui.Theme;
  *   <li>Tick the box.</li>
  * </ol>
  *
- * <p>Typing coordinates in by hand is not elegant, and the reason is worth stating plainly: this client
- * cannot yet enumerate scenery, so nothing can find the nearest tree for you. That is the top item on
- * the contribution list in the README, and landing it would make this plugin four lines shorter and
- * every gathering plugin easier to write.</p>
+ * <p>Typing coordinates in by hand is not elegant. This plugin predates scenery enumeration and is
+ * kept as the simplest worked example; {@link MntnChopper} uses {@link oxclient.api.Scenery} to find
+ * the nearest tree itself.</p>
  */
 public final class Woodcutter extends Plugin {
 

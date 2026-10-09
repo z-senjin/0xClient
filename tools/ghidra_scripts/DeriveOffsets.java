@@ -39,6 +39,7 @@ import java.io.PrintWriter;
 import java.nio.file.Files;
 import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -305,6 +306,7 @@ public class DeriveOffsets extends GhidraScript {
         //      binds or on the call graph out of one, the same discipline as above.
         try { derive2(); } catch (Exception e) { notes.add("derive2 aborted: " + e); printerr("derive2: " + e); }
         try { derive3(); } catch (Exception e) { notes.add("derive3 aborted: " + e); printerr("derive3: " + e); }
+        try { derive4(); } catch (Exception e) { notes.add("derive4 aborted: " + e); printerr("derive4: " + e); }
 
         // ---- item containers: the invGetObjId leaf is a Lua trampoline; the one function it calls
         //      directly is the implementation, which walks a global bucket table (count, then array)
@@ -782,7 +784,7 @@ public class DeriveOffsets extends GhidraScript {
             }
             senders.computeIfAbsent(f, x -> new LinkedHashSet<>()).add(imm);
         }
-        List<Function> npc = new ArrayList<>(), loc = new ArrayList<>(), walk = new ArrayList<>();
+        List<Function> npc = new ArrayList<>(), loc = new ArrayList<>(), walk = new ArrayList<>(), ifop = new ArrayList<>();
         Pattern cmpArg = Pattern.compile("CMP dword ptr \\[RDX( \\+ 0x[48])?\\],EAX");
         for (Map.Entry<Function, Set<Long>> e : senders.entrySet()) {
             Function f = e.getKey();
@@ -806,10 +808,247 @@ public class DeriveOffsets extends GhidraScript {
             // menu walk: one opcode; its {level,x,y} argument compared against the last-destination
             // global first; no third argument (the direct-click walk takes one in R8D)
             if (ops == 1 && argCmps == 3 && !usesR8) walk.add(f);
+            // item / interface-button option: two opcodes (subop 0 or not), and the slot's option mask
+            // shifted by the option number in CL before anything is sent
+            boolean sarCl = false;
+            for (Instruction i : body) if (i.toString().equals("SAR EAX,CL")) { sarCl = true; break; }
+            if (ops == 2 && sarCl) ifop.add(f);
         }
         putUnique("ACT_NPC_OP", npc, "the only packet sender that tests its entity argument, starts five different packets and switches on the option in R8D");
         putUnique("ACT_LOC_OP", loc, "the only packet sender that starts five different packets and switches on the option in R9D");
         putUnique("ACT_WALK", walk, "the only one-packet sender that compares a three-int {level,x,y} argument against the last-destination global and takes no third argument (the menu's Walk here)");
+        putUnique("ACT_IF_OP", ifop, "the only packet sender that starts exactly two packets and shifts the slot's option mask by CL (SAR EAX,CL)");
+    }
+
+    // ===========================================================================================
+    // derive4: scenery (offsets.hpp's SCENERY block). Anchored on the loc_find Lua binding's leaf,
+    // which names itself in an error string; everything else is read off the two functions it calls.
+    // ===========================================================================================
+    private void derive4() {
+        Instruction s = firstRef("Could not find supplied coord's world instance in loc_find.");
+        Function lf = s == null ? null : getFunctionContaining(s.getAddress());
+        if (lf == null) { notes.add("scenery: the loc_find leaf was not found"); return; }
+        List<Instruction> body = new ArrayList<>();
+        for (Instruction i : currentProgram.getListing().getInstructions(lf.getBody(), true)) body.add(i);
+
+        // ---- the tile probe: a call whose RCX is `mov rcx,[view+SMALL]` and whose body indexes the
+        //      grid with two IMULs off RCX and loads the tile array off RCX
+        Address probe = null, getter = null;
+        long gridDisp = -1;
+        Instruction gridLoad = null;
+        for (int k = 0; k < body.size() && probe == null; k++) {
+            Instruction c = body.get(k);
+            if (!c.getMnemonicString().equals("CALL")) continue;
+            Address t = callTarget(c);
+            if (t == null) continue;
+            Instruction rcx = null;
+            for (int b = k - 1; b >= 0 && b >= k - 8; b--) {
+                Instruction q = body.get(b);
+                if (q.getMnemonicString().equals("MOV") && destReg(q).equals("RCX")) { rcx = q; break; }
+            }
+            Mem rm = rcx == null ? null : memOf(rcx);
+            if (rm == null || !rm.hasDisp || rm.disp <= 0 || rm.disp >= 0x100 || rm.absolute != null) continue;
+            if (!gridProbe(t)) continue;
+            probe = t;
+            gridDisp = rm.disp;
+            gridLoad = rcx;
+            for (int n = k + 1; n < body.size() && n < k + 20; n++) {
+                if (body.get(n).getMnemonicString().equals("CALL")) { getter = callTarget(body.get(n)); break; }
+            }
+        }
+        if (probe == null) { notes.add("scenery: loc_find's tile probe was not recognised"); return; }
+        put("SCENE_GRID", gridDisp, "loc_find passes the world view's grid to the tile probe: " + at(gridLoad));
+
+        List<Instruction> pl = linear(probe, 48);
+        Map<Long, Integer> imuls = new LinkedHashMap<>();
+        for (Instruction i : pl) {
+            Mem m = memOf(i);
+            if (i.getMnemonicString().equals("IMUL") && m != null && m.base.equals("RCX") && m.hasDisp) imuls.merge(m.disp, 1, Integer::sum);
+        }
+        long dimX = -1, dimY = -1;
+        for (Map.Entry<Long, Integer> e : imuls.entrySet()) {
+            if (e.getValue() == 1) dimX = e.getKey();
+            else if (e.getValue() == 2) dimY = e.getKey();
+        }
+        long tiles = -1;
+        Instruction tilesAt = null;
+        boolean afterDimX = false;
+        for (Instruction i : pl) {
+            Mem m = memOf(i);
+            if (m == null) continue;
+            if (i.getMnemonicString().equals("IMUL") && m.base.equals("RCX") && m.disp == dimX) afterDimX = true;
+            else if (afterDimX && i.getMnemonicString().equals("MOV") && m.base.equals("RCX") && m.hasDisp) { tiles = m.disp; tilesAt = i; break; }
+        }
+        if (imuls.size() != 2 || dimX < 0 || dimY < 0 || tilesAt == null) {
+            notes.add("scenery: the tile probe at rva 0x" + Long.toHexString(rva(probe)) + " did not read as dimX/dimY/tiles " + imuls + " listing " + pl.size());
+        } else {
+            put("GRID_DIM_X", dimX, "the tile probe multiplies the level by it (once): rva 0x" + Long.toHexString(rva(probe)));
+            put("GRID_DIM_Y", dimY, "the tile probe multiplies by it on both paths: rva 0x" + Long.toHexString(rva(probe)));
+            put("GRID_TILES", tiles, "the tile array the probe indexes on the level path: " + at(tilesAt));
+        }
+
+        // ---- walls: the probe reports a match on the wall slot as layer 0 (`mov word ptr [rbx],0x100`);
+        //      the slot is the `mov rcx,[tile+N]` that branch tested, the handle the `mov rcx,[rcx+H]` after it
+        {
+            List<Instruction> wl = linear(probe, 160);
+            for (int k = 0; k < wl.size(); k++) {
+                if (!wl.get(k).toString().equals("MOV word ptr [RBX],0x100")) continue;
+                Instruction slot = null, handle = null;
+                for (int b = k - 1; b >= 0 && b >= k - 10; b--) {
+                    Instruction q = wl.get(b);
+                    Mem qm = memOf(q);
+                    if (qm == null || !q.getMnemonicString().equals("MOV") || !destReg(q).equals("RCX") || !qm.hasDisp) continue;
+                    if (qm.base.equals("RCX") && handle == null) handle = q;
+                    else if (!qm.base.equals("RCX") && qm.disp >= 0x100) { slot = q; break; }
+                }
+                if (slot != null && handle != null) {
+                    put("TILE_WALL", memOf(slot).disp, "the tile probe's layer-0 (wall) slot: " + at(slot));
+                    put("WALL_HANDLE", memOf(handle).disp, "the wall's handle, read before the id test: " + at(handle));
+                } else notes.add("scenery: the wall slot did not read as slot + handle");
+                break;
+            }
+        }
+
+        // ---- the game-object walk: the probe's callee that loops over a tile's object entries and
+        //      compares each object's origin against the tile
+        for (Address t : callees(linear(probe, 160))) {
+            List<Instruction> ol = linear(t, 120);
+            Instruction cnt = null, arr = null, handle = null;
+            List<Instruction> cmps = new ArrayList<>();
+            for (int k = 0; k < ol.size(); k++) {
+                Instruction i = ol.get(k);
+                Mem m = memOf(i);
+                String mn = i.getMnemonicString();
+                if (m == null || !m.hasDisp || m.disp <= 0 || !m.index.isEmpty()) continue;
+                if (cnt == null && mn.equals("MOVSXD") && m.disp < 0x100) { cnt = i; continue; }
+                if (cnt != null && arr == null && mn.equals("MOV") && i.toString().contains("qword ptr") && m.disp < 0x100
+                        && destReg(i).equals(m.base)) { arr = i; continue; }
+                if (arr != null && handle == null && mn.equals("MOV") && destReg(i).equals("RCX") && m.disp >= 0x100
+                        && k + 1 < ol.size() && ol.get(k + 1).getMnemonicString().equals("CALL")) { handle = i; continue; }
+                if (handle != null && mn.equals("CMP") && i.toString().startsWith("CMP dword ptr [") && m.disp >= 0x100) cmps.add(i);
+            }
+            if (cnt == null || arr == null || handle == null || cmps.size() < 2) continue;
+            put("TILE_OBJ_COUNT", memOf(cnt).disp, "the object walk's entry count: " + at(cnt));
+            put("TILE_OBJS", memOf(arr).disp, "the object walk's entry array: " + at(arr));
+            put("LOC_HANDLE", memOf(handle).disp, "the handle the object walk tests for kind 2: " + at(handle));
+            put("LOC_X", memOf(cmps.get(0)).disp, "the object's origin x, compared against the tile: " + at(cmps.get(0)));
+            put("LOC_Y", memOf(cmps.get(1)).disp, "the object's origin y, compared against the tile: " + at(cmps.get(1)));
+            break;
+        }
+        if (val("LOC_HANDLE") < 0) { StringBuilder cb = new StringBuilder(); for (Address t : callees(linear(probe, 160))) cb.append(" 0x").append(Long.toHexString(rva(t))); notes.add("scenery: no game-object walk among the tile probe's callees:" + cb); }
+
+        // ---- the loc definition getter: the call right after the probe. Its first instructions load
+        //      the bucket count (dword) and the bucket array (qword) of its cache, adjacent globals.
+        if (getter == null) { notes.add("scenery: no call after the tile probe in loc_find"); return; }
+        Address count = null, buckets = null;
+        Instruction bAt = null;
+        for (Instruction i : linear(getter, 16)) {
+            Mem m = memOf(i);
+            if (m == null || m.absolute == null || !i.getMnemonicString().equals("MOV")) continue;
+            if (i.toString().contains("dword ptr") && count == null) count = m.absolute;
+            else if (i.toString().contains("qword ptr") && buckets == null) { buckets = m.absolute; bAt = i; }
+        }
+        if (count == null || buckets == null || count.getOffset() != buckets.getOffset() + 8) {
+            notes.add("scenery: the loc definition getter at rva 0x" + Long.toHexString(rva(getter)) + " did not load an adjacent {buckets, count} pair");
+            return;
+        }
+        put("LOCDEF_CACHE", rva(buckets), "the loc definition getter (called after the tile probe in loc_find) loads its cache's buckets, count at +8: " + at(bAt));
+
+        // ---- the definition's name: the callers of the getter that build a menu entry -- they colour
+        //      the loc's name with "<col=00FFFF>" -- take `lea r,[def+N]` and test the string's flag
+        //      byte at N+0x17 (an NxtString). The first such read after the getter call is the name.
+        Set<Function> menuFns = new HashSet<>();
+        for (Address sa : findStrings("<col=00FFFF>")) for (Reference r : getReferencesTo(sa)) {
+            Function f = getFunctionContaining(r.getFromAddress());
+            if (f != null) menuFns.add(f);
+        }
+        Map<Long, Integer> names = new LinkedHashMap<>();
+        Map<Long, Integer> opsAt = new LinkedHashMap<>();
+        Set<Function> seenF = new HashSet<>();
+        for (Reference r : getReferencesTo(getter)) {
+            Function f = getFunctionContaining(r.getFromAddress());
+            if (f == null || !menuFns.contains(f) || !seenF.add(f)) continue;
+            List<Instruction> fl = new ArrayList<>();
+            for (Instruction i : currentProgram.getListing().getInstructions(f.getBody(), true)) fl.add(i);
+            int from = 0;
+            while (from < fl.size() && !(fl.get(from).getMnemonicString().equals("CALL") && getter.equals(callTarget(fl.get(from))))) from++;
+            boolean got = false;
+            for (int k = from; k < fl.size() && !got; k++) {
+                Instruction i = fl.get(k);
+                Mem m = memOf(i);
+                if (!i.getMnemonicString().equals("LEA") || m == null || !m.hasDisp || !m.index.isEmpty() || m.disp <= 0 || m.disp > 0x400) continue;
+                String dst = destReg(i);
+                for (int n = k + 1; n < fl.size() && n < k + 12; n++) {
+                    Instruction q = fl.get(n);
+                    Mem qm = memOf(q);
+                    if (qm == null || !qm.hasDisp || !qm.index.isEmpty() || !q.toString().contains("byte ptr")) continue;
+                    if ((qm.base.equals(m.base) && qm.disp == m.disp + 0x17) || (qm.base.equals(dst) && qm.disp == 0x17)) {
+                        names.merge(m.disp, 1, Integer::sum);
+                        got = true;   // the first string read after the definition is fetched
+                        break;
+                    }
+                }
+                // the options vector, after the name: `add r,IMM; ... mov rcx,r; call` -- the vector
+                // object handed to the option helpers (its entries are 0x40 bytes, `sar rax,6`)
+                if (got) {
+                    for (int n = k + 1; n < fl.size() && n < k + 120; n++) {
+                        Instruction a = fl.get(n);
+                        String as = a.toString();
+                        if (!as.startsWith("ADD R") || !as.contains(",0x")) continue;
+                        long imm;
+                        try { imm = Long.parseLong(as.substring(as.indexOf(",0x") + 3), 16); } catch (NumberFormatException e) { continue; }
+                        if (imm < 0x80 || imm > 0x400) continue;
+                        String reg = destReg(a);
+                        boolean handed = false;
+                        for (int q = n + 1; q < fl.size() && q < n + 5; q++) {
+                            String qs = fl.get(q).toString();
+                            if (qs.equals("MOV RCX," + reg)) handed = true;
+                            if (handed && fl.get(q).getMnemonicString().equals("CALL")) {
+                                Address c = callTarget(fl.get(q));
+                                if (c != null && stride40(c)) { opsAt.merge(imm, 1, Integer::sum); }
+                                break;
+                            }
+                        }
+                        if (handed) break;
+                    }
+                }
+            }
+        }
+        long name = -1;
+        int nb = 0, n2 = 0;
+        for (Map.Entry<Long, Integer> e : names.entrySet()) {
+            if (e.getValue() > nb) { n2 = nb; nb = e.getValue(); name = e.getKey(); }
+            else if (e.getValue() > n2) n2 = e.getValue();
+        }
+        if (name > 0 && nb > n2) put("LOCDEF_NAME", name, "the first NxtString the loc menu builders read off the definition after fetching it (" + nb + " sites, next " + n2 + ")");
+        else notes.add("scenery: no clear loc definition name field (" + names + ")");
+        if (opsAt.size() == 1) put("LOCDEF_OPS", opsAt.keySet().iterator().next(), "the loc menu builder hands def+N to the option helpers (0x40-byte entries) right after reading the name");
+        else notes.add("scenery: no clear loc definition options field (" + opsAt + ")");
+    }
+
+    /** A helper over a vector of 0x40-byte entries: `sar rax,0x6` / `shl r,0x6`, here or one call down. */
+    private boolean stride40(Address f) {
+        for (Instruction i : linear(f, 30)) {
+            String s = i.toString();
+            if (s.endsWith(",0x6") && (s.startsWith("SAR ") || s.startsWith("SHL "))) return true;
+        }
+        for (Address c : callees(linear(f, 12))) {
+            for (Instruction i : linear(c, 30)) {
+                String s = i.toString();
+                if (s.endsWith(",0x6") && (s.startsWith("SAR ") || s.startsWith("SHL "))) return true;
+            }
+        }
+        return false;
+    }
+
+    /** A grid tile probe: two-or-more IMULs off RCX with large displacements and a tile array load. */
+    private boolean gridProbe(Address t) {
+        int imul = 0;
+        for (Instruction i : linear(t, 40)) {
+            Mem m = memOf(i);
+            if (i.getMnemonicString().equals("IMUL") && m != null && m.base.equals("RCX") && m.hasDisp && m.disp >= 0x100) imul++;
+        }
+        return imul >= 2;
     }
 
     private void putUnique(String name, List<Function> fs, String why) {

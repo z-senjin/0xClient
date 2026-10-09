@@ -94,6 +94,40 @@ public final class Natives {
      */
     public static native boolean interactNpc(int uid, int opcode);
 
+    /**
+     * Take an item's option the way clicking it does: option {@code op} (1..10) on the item in
+     * {@code slot} of interface component {@code widgetId} ({@code (group << 16) | component}; the
+     * inventory is 149:0). {@code itemId} is the item expected in that slot. Queued and sent on the game
+     * thread (client/actions.hpp, itemAction).
+     *
+     * @return true when queued; false when dropped -- ACT_IF_OP not measured on this build, actions off,
+     *     bad arguments, or a full queue. The DLL log says which, once.
+     */
+    public static native boolean itemAction(int widgetId, int slot, int op, int itemId);
+
+    /**
+     * The scenery within {@code radius} tiles of you on your floor, four ints each, flattened:
+     * {@code {id, sceneX, sceneY, layer}} -- the origin tile in scene coordinates; layer 2 is a game
+     * object (trees, booths), 0 a wall (doors, gates). Empty before you spawn. See client/scenery.hpp;
+     * {@link oxclient.api.Scenery} is the friendly form.
+     */
+    public static native int[] locs(int radius);
+
+    /** A loc's name from the client's definition cache ("Tree"), or "" when it is not cached now. */
+    public static native String locName(int id);
+
+    /**
+     * A loc's five right-click options, newline-separated -- option n is line n, empty where it has none
+     * ("Chop down\n\n\n\n"). "" when its definition is not cached right now.
+     */
+    public static native String locOptions(int id);
+
+    /**
+     * Take option {@code op} (1..5) on scenery object {@code id} whose origin is SCENE tile
+     * {@code (sceneX, sceneY)}, the way clicking that option does. Queued; false when dropped.
+     */
+    public static native boolean objectAction(int sceneX, int sceneY, int id, int op);
+
     /** The game's client area on screen: {@code {x, y, width, height}}. */
     public static native int[] viewport();
 

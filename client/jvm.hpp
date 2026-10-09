@@ -28,6 +28,7 @@
 #include <vector>
 #include "game.hpp"
 #include "actions.hpp"
+#include "scenery.hpp"
 #include "overlay.hpp"
 #include "panel.hpp"
 
@@ -475,6 +476,66 @@ inline jboolean JNICALL nDoAction(JNIEnv*, jclass, jint sx, jint sy, jint opcode
 /// resolve (it despawned this frame) or the action was dropped -- see nDoAction.
 inline jboolean JNICALL nInteractNpc(JNIEnv*, jclass, jint uid, jint opcode) {
     return interactNpc(uid, opcode) ? JNI_TRUE : JNI_FALSE;
+}
+
+/// Take an item option: `op` (1..10) on the item in `slot` of interface component `widgetId`. Queued
+/// like every action (actions.hpp: itemAction); false when it was dropped.
+inline jboolean JNICALL nItemAction(JNIEnv*, jclass, jint widgetId, jint slot, jint op, jint itemId) {
+    return itemAction(widgetId, slot, op, itemId) ? JNI_TRUE : JNI_FALSE;
+}
+
+/// The scenery within `radius` tiles of you on your floor, four ints each, flattened:
+/// {id, sceneX, sceneY, layer} -- the origin tile in scene coordinates like entities(), layer 2 for a
+/// game object (trees, booths) and 0 for a wall (doors, gates). Empty before you spawn or when the
+/// scene grid is not readable (scenery.hpp).
+inline jintArray JNICALL nLocs(JNIEnv* env, jclass, jint radius) {
+    bool found = false;
+    const Entity me = localPlayer(found);
+    if (!found) return env->NewIntArray(0);
+    const int r = radius < 1 ? 1 : radius > 104 ? 104 : radius;
+    std::vector<jint> flat;
+    flat.reserve(256);
+    const int n = forEachLoc(me.plane >= 0 ? me.plane : 0, me.sceneX, me.sceneY, r, [&](const Loc& l) {
+        flat.push_back(l.id);
+        flat.push_back(l.sceneX);
+        flat.push_back(l.sceneY);
+        flat.push_back(l.layer);
+    });
+    static bool logged = false;
+    if (!logged) {
+        logged = true;
+        oxc::logf("[scenery] first read: %d game objects within %d tiles of scene (%d,%d) plane %d\n",
+                  n, r, me.sceneX, me.sceneY, me.plane);
+    }
+    jintArray arr = env->NewIntArray(static_cast<jsize>(flat.size()));
+    if (arr && !flat.empty()) env->SetIntArrayRegion(arr, 0, static_cast<jsize>(flat.size()), flat.data());
+    return arr;
+}
+
+inline jstring gameBytesToJString(JNIEnv* env, const std::string& s);   // defined below
+
+/// A loc's name from the client's definition cache ("Tree"), or "" when it is not cached right now.
+inline jstring JNICALL nLocName(JNIEnv* env, jclass, jint id) {
+    return gameBytesToJString(env, locName(id));
+}
+
+/// A loc's five options, newline-separated ("Chop down\n\n\n\n" -- option n is line n), or "" when the
+/// definition is not cached right now.
+inline jstring JNICALL nLocOptions(JNIEnv* env, jclass, jint id) {
+    const auto ops = locOptions(id);
+    std::string joined;
+    bool any = false;
+    for (int i = 0; i < 5; ++i) {
+        if (i) joined += '\n';
+        joined += ops[i];
+        any = any || !ops[i].empty();
+    }
+    return gameBytesToJString(env, any ? joined : std::string{});
+}
+
+/// Take option `op` (1..5) on scenery object `id` at SCENE tile (sx, sy). Queued; false when dropped.
+inline jboolean JNICALL nObjectAction(JNIEnv*, jclass, jint sx, jint sy, jint id, jint op) {
+    return objectAction(sx, sy, id, op) ? JNI_TRUE : JNI_FALSE;
 }
 
 /// The game's client area on screen: {x, y, width, height}. Java needs the size to make its image and
@@ -1361,6 +1422,11 @@ inline bool startJvm(const std::wstring& javaHome, const std::wstring& jarPath, 
         { const_cast<char*>("project"),     const_cast<char*>("(III)J"),  reinterpret_cast<void*>(nProject) },
         { const_cast<char*>("doAction"),    const_cast<char*>("(IIII)Z"), reinterpret_cast<void*>(nDoAction) },
         { const_cast<char*>("interactNpc"), const_cast<char*>("(II)Z"),   reinterpret_cast<void*>(nInteractNpc) },
+        { const_cast<char*>("itemAction"),  const_cast<char*>("(IIII)Z"), reinterpret_cast<void*>(nItemAction) },
+        { const_cast<char*>("locs"),        const_cast<char*>("(I)[I"),   reinterpret_cast<void*>(nLocs) },
+        { const_cast<char*>("locName"),     const_cast<char*>("(I)Ljava/lang/String;"), reinterpret_cast<void*>(nLocName) },
+        { const_cast<char*>("locOptions"),  const_cast<char*>("(I)Ljava/lang/String;"), reinterpret_cast<void*>(nLocOptions) },
+        { const_cast<char*>("objectAction"),const_cast<char*>("(IIII)Z"), reinterpret_cast<void*>(nObjectAction) },
         { const_cast<char*>("viewport"),    const_cast<char*>("()[I"),    reinterpret_cast<void*>(nViewport) },
         { const_cast<char*>("input"),       const_cast<char*>("()[I"),    reinterpret_cast<void*>(nInput) },
         { const_cast<char*>("present"),     const_cast<char*>("([III)V"), reinterpret_cast<void*>(nPresent) },
