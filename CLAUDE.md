@@ -28,7 +28,8 @@ This file is read by coding agents working in this repository. People should rea
 
 ## Layout
 
-- `java/oxclient/` — the client: API, plugins, config, panel, profiles. `java/net/runelite/` is the
+- `java/oxclient/` — the client: API (`api/`), the task framework scripts are built on (`framework/`),
+  plugins, config, panel, profiles. `java/net/runelite/` is the
   RuneLite API shim; `java/shortestpath/` is the vendored Shortest Path plugin.
 - `client/` — the injected DLL (C++). `offsets.hpp` holds the defaults and their derivation notes;
   `offsets_json.hpp` loads `offsets/client-<build>.json` at run time.

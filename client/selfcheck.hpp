@@ -43,6 +43,7 @@
 #include "offsets.hpp"
 #include "offsets_json.hpp"
 #include "scenery.hpp"
+#include "items.hpp"
 
 namespace oxc::selfcheck {
 
@@ -434,6 +435,37 @@ inline void checkScenery(Results& r, const Entity& me) {
     r.add({"LOCDEF_OPS"}, withOps > 0 ? "pass" : "fail", withOps > 0 ? opSample : std::string("no listed object had a readable option"));
 }
 
+// Items (items.hpp): every item in your inventory is drawn, so its definition is cached -- a wrong cache
+// or name offset reads no names. Coins (995), when carried, must read stackable. Ground items: a wrong
+// list layout finds nothing or garbage ids; one found whose name is cached is a pass, none is a skip.
+inline void checkItems(Results& r, const Entity& me) {
+    int carried = 0, named = 0, coinsStack = -2;
+    std::string sample;
+    const int size = containerSize(93);
+    for (int i = 0; i < size && i < 28; ++i) {
+        const int id = containerItem(93, i);
+        if (id < 0 || containerQty(93, i) <= 0) continue;
+        ++carried;
+        const std::string n = itemName(id);
+        if (!n.empty()) { ++named; if (named <= 3) sample += fmt("%s%d=%s", sample.empty() ? "" : ", ", id, n.c_str()); }
+        if (id == 995) coinsStack = itemInfo(id)[0];
+    }
+    if (carried == 0) r.add({"ITEMDEF_CACHE", "ITEMDEF_NAME"}, "skip", "nothing in the inventory to name");
+    else r.add({"ITEMDEF_CACHE", "ITEMDEF_NAME"}, named == carried ? "pass" : "fail", fmt("%d of %d carried items named: %s", named, carried, sample.c_str()));
+    if (coinsStack == -2) r.add({"ITEMDEF_STACKABLE"}, "skip", "no coins in the inventory to test");
+    else r.add({"ITEMDEF_STACKABLE"}, coinsStack == 1 ? "pass" : "fail", fmt("coins read stackable=%d", coinsStack));
+
+    int ground = 0, groundNamed = 0;
+    std::string gs;
+    forEachGroundItem(me.plane >= 0 ? me.plane : 0, me.sceneX, me.sceneY, 15, [&](const GroundItem& g) {
+        ++ground;
+        const std::string n = itemName(g.id);
+        if (!n.empty() && groundNamed < 3) { ++groundNamed; gs += fmt("%s%d x%d=%s", gs.empty() ? "" : ", ", g.id, g.quantity, n.c_str()); }
+    });
+    r.add({"SCENE_OBJ_LISTS", "OBJ_NODE_OBJ", "OBJ_ID", "OBJ_COUNT"}, ground == 0 ? "skip" : groundNamed > 0 ? "pass" : "fail",
+          ground == 0 ? std::string("no items on the ground within 15 tiles") : fmt("%d ground items; named: %s", ground, gs.c_str()));
+}
+
 // ---------------------------------------------------------------------------------------------------
 // The report
 // ---------------------------------------------------------------------------------------------------
@@ -537,9 +569,11 @@ public:
         checkWidgets(r, canvas);
         checkGlobals(r);
         checkScenery(r, me);
+        checkItems(r, me);
         r.add({"DO_ACTION", "OPLOC1", "OPNPC1", "OPNPC2", "OPNPC3", "OPNPC4", "OPNPC5", "OP_WALK",
                "PENDING_ACTION_PACKED_ID", "PENDING_ACTION_INDEX", "PENDING_ACTION_TARGET", "PENDING_ACTION_SEQ",
-               "PENDING_ACTION_PENDING", "ACT_IF_OP"},
+               "PENDING_ACTION_PENDING", "ACT_IF_OP", "ACT_OBJ_OP", "ACT_ON_ITEM", "ACT_ON_LOC", "ACT_ON_NPC", "ACT_ON_OBJ",
+               "TARGET_STATE", "TARGET_SEL", "SEL_WIDGET", "SEL_SLOT", "SEL_ITEM"},
               "skip", "not checkable by reading: needs a hook-and-log against a real click");
         write(dllDir, r);
     }

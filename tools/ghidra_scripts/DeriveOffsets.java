@@ -307,6 +307,7 @@ public class DeriveOffsets extends GhidraScript {
         try { derive2(); } catch (Exception e) { notes.add("derive2 aborted: " + e); printerr("derive2: " + e); }
         try { derive3(); } catch (Exception e) { notes.add("derive3 aborted: " + e); printerr("derive3: " + e); }
         try { derive4(); } catch (Exception e) { notes.add("derive4 aborted: " + e); printerr("derive4: " + e); }
+        try { derive5(); } catch (Exception e) { notes.add("derive5 aborted: " + e); printerr("derive5: " + e); }
 
         // ---- item containers: the invGetObjId leaf is a Lua trampoline; the one function it calls
         //      directly is the implementation, which walks a global bucket table (count, then array)
@@ -769,7 +770,7 @@ public class DeriveOffsets extends GhidraScript {
         notes.add("packet-start function rva 0x" + Long.toHexString(rva(p)) + " (" + best + " call sites)");
 
         // ---- group P's callers: each sender, with the distinct packet opcodes it starts
-        Map<Function, Set<Long>> senders = new LinkedHashMap<>();
+        Map<Function, Set<Long>> senders = senderMap;
         for (Reference r : getReferencesTo(p)) {
             Function f = getFunctionContaining(r.getFromAddress());
             Instruction call = getInstructionAt(r.getFromAddress());
@@ -1039,6 +1040,241 @@ public class DeriveOffsets extends GhidraScript {
             }
         }
         return false;
+    }
+
+    /** Every packet sender (a caller of the packet-start function) and the opcodes it starts; filled by derive3. */
+    private final Map<Function, Set<Long>> senderMap = new LinkedHashMap<>();
+
+    // ===========================================================================================
+    // derive5: the "use item on" senders and the selection they read, ground items, item
+    // definitions (offsets.hpp's TARGETS / GROUND ITEMS / ITEM DEFINITIONS blocks). Same discipline:
+    // every rule must match exactly one thing or it writes nothing.
+    // ===========================================================================================
+    private void derive5() {
+        deriveTargets();
+        deriveGroundItems();
+        deriveItemDefs();
+    }
+
+    private List<Instruction> bodyOf(Function f) {
+        List<Instruction> l = new ArrayList<>();
+        for (Instruction i : currentProgram.getListing().getInstructions(f.getBody(), true)) l.add(i);
+        return l;
+    }
+
+    private Function fnAt(long rvaValue) {
+        return rvaValue <= 0 ? null : getFunctionAt(toAddr(base + rvaValue));
+    }
+
+    private void deriveTargets() {
+        if (senderMap.isEmpty()) { notes.add("targets: no packet senders (derive3 found no packet-start function)"); return; }
+        Map<Function, Set<Address>> calls = new LinkedHashMap<>();
+        Map<Address, Integer> used = new LinkedHashMap<>();
+        for (Function f : senderMap.keySet()) {
+            Set<Address> c = new LinkedHashSet<>(callees(bodyOf(f)));
+            calls.put(f, c);
+            for (Address a : c) used.merge(a, 1, Integer::sum);
+        }
+        // ---- the selection getter: `call Y; add rax,IMM; ret` where Y is `mov rax,[rcx+D]; ret`,
+        //      called by at least three senders (the "use item on ..." family)
+        Address sel = null;
+        long state = -1, selOff = -1;
+        Instruction stateAt = null, offAt = null;
+        for (Map.Entry<Address, Integer> e : used.entrySet()) {
+            if (e.getValue() < 3) continue;
+            List<Instruction> l = linear(e.getKey(), 6);
+            Instruction call = null, add = null;
+            for (Instruction i : l) {
+                if (i.getMnemonicString().equals("RET")) break;          // one small function only
+                if (call == null && i.getMnemonicString().equals("CALL")) call = i;
+                else if (call != null && add == null && i.toString().startsWith("ADD RAX,0x")) add = i;
+            }
+            if (call == null || add == null) continue;
+            Address y = callTarget(call);
+            List<Instruction> yl = y == null ? new ArrayList<>() : linear(y, 2);
+            if (yl.size() < 2 || !yl.get(1).getMnemonicString().equals("RET")) continue;
+            Mem m = memOf(yl.get(0));
+            if (m == null || !yl.get(0).toString().startsWith("MOV RAX,qword ptr [RCX + ") || !m.hasDisp) continue;
+            if (sel != null) { notes.add("targets: two selection getters (0x" + Long.toHexString(rva(sel)) + ", 0x" + Long.toHexString(rva(e.getKey())) + ") -- not derived"); return; }
+            sel = e.getKey();
+            state = m.disp;
+            stateAt = yl.get(0);
+            selOff = Long.parseLong(add.toString().substring("ADD RAX,0x".length()), 16);
+            offAt = add;
+        }
+        if (sel == null) { notes.add("targets: no selection getter among the senders' callees"); return; }
+        put("TARGET_STATE", state, "the selection getter's state object (client field): " + at(stateAt));
+        put("TARGET_SEL", selOff, "the selection getter adds this to the state object: " + at(offAt));
+
+        List<Function> targets = new ArrayList<>();
+        for (Map.Entry<Function, Set<Long>> e : senderMap.entrySet())
+            if (e.getValue().size() == 1 && calls.get(e.getKey()).contains(sel)) targets.add(e.getKey());
+
+        // ---- the ground-item option sender: four or more packets, tests its option (a stack
+        //      argument) with `cmp ecx,1`, and is neither the NPC nor the object sender
+        Function npc = fnAt(val("ACT_NPC_OP")), loc = fnAt(val("ACT_LOC_OP")), ifop = fnAt(val("ACT_IF_OP"));
+        List<Function> objOps = new ArrayList<>();
+        for (Map.Entry<Function, Set<Long>> e : senderMap.entrySet()) {
+            Function f = e.getKey();
+            if (e.getValue().size() < 4 || f.equals(npc) || f.equals(loc)) continue;
+            // its option is a stack argument loaded first thing: `mov ecx,dword ptr [rbp+N]` in the prologue
+            List<Instruction> body = bodyOf(f);
+            boolean stackOp = false, cmp1 = false;
+            for (int k = 0; k < body.size() && k < 8; k++) if (body.get(k).toString().startsWith("MOV ECX,dword ptr [RBP + ")) stackOp = true;
+            for (Instruction i : body) if (i.toString().equals("CMP ECX,0x1")) { cmp1 = true; break; }
+            if (stackOp && cmp1) objOps.add(f);
+        }
+        putUnique("ACT_OBJ_OP", objOps, "the only four-plus-packet sender that loads its option from the stack in its prologue and tests it with CMP ECX,1 (neither the NPC nor the object sender)");
+        Function obj = objOps.size() == 1 ? objOps.get(0) : null;
+
+        // ---- each "use on" sender shares a rarely used helper with its family's option sender
+        //      (the client's own post-click bookkeeping for that kind of target)
+        putUnique("ACT_ON_LOC", sharesHelper(targets, loc, calls, used, 3, 1), "the selection-reading sender that shares a post-click helper with ACT_LOC_OP");
+        putUnique("ACT_ON_NPC", sharesHelper(targets, npc, calls, used, 3, 1), "the selection-reading sender that shares a post-click helper with ACT_NPC_OP");
+        putUnique("ACT_ON_OBJ", sharesHelper(targets, obj, calls, used, 3, 1), "the selection-reading sender that shares a post-click helper with ACT_OBJ_OP");
+        putUnique("ACT_ON_ITEM", sharesHelper(targets, ifop, calls, used, 6, 3), "the selection-reading sender that resolves its target component the way ACT_IF_OP does (three or more shared callees)");
+
+        // ---- the three selected-item fields: the dword loads the object target sender makes off
+        //      the selection pointer, in ascending order {widget, slot, item}. The ORDER is an
+        //      assumption (the client's own field order); a live use-item run settles it.
+        Function onLoc = fnAt(val("ACT_ON_LOC"));
+        if (onLoc != null) {
+            List<Instruction> l = bodyOf(onLoc);
+            String reg = null;
+            java.util.TreeSet<Long> f3 = new java.util.TreeSet<>();
+            for (int k = 0; k < l.size(); k++) {
+                Instruction i = l.get(k);
+                if (reg == null) {
+                    if (i.getMnemonicString().equals("CALL") && sel.equals(callTarget(i))) {
+                        for (int n = k + 1; n < l.size() && n < k + 12; n++)
+                            if (l.get(n).toString().matches("MOV R[A-Z0-9]+,RAX")) { reg = destReg(l.get(n)); break; }
+                        if (reg == null) reg = "RAX";
+                    }
+                    continue;
+                }
+                Mem m = memOf(i);
+                if (m != null && m.base.equals(reg) && m.hasDisp && i.toString().contains("dword ptr") && m.disp >= 0x40 && m.disp < 0x200) f3.add(m.disp);
+            }
+            if (f3.size() == 3) {
+                Long[] v = f3.toArray(new Long[0]);
+                put("SEL_WIDGET", v[0], "lowest of the three selection fields ACT_ON_LOC reads (order assumed)");
+                put("SEL_SLOT", v[1], "middle of the three selection fields ACT_ON_LOC reads (order assumed)");
+                put("SEL_ITEM", v[2], "highest of the three selection fields ACT_ON_LOC reads (order assumed)");
+            } else notes.add("targets: ACT_ON_LOC read " + f3 + " off the selection, not three fields");
+        }
+    }
+
+    /** The targets that share at least `min` helpers with `family` that at most `maxUse` senders call. */
+    private List<Function> sharesHelper(List<Function> targets, Function family, Map<Function, Set<Address>> calls,
+                                        Map<Address, Integer> used, int maxUse, int min) {
+        List<Function> out = new ArrayList<>();
+        if (family == null || !calls.containsKey(family)) return out;
+        for (Function t : targets) {
+            int shared = 0;
+            for (Address a : calls.get(t)) if (calls.get(family).contains(a) && used.getOrDefault(a, 99) <= maxUse) shared++;
+            if (shared >= min) out.add(t);
+        }
+        return out;
+    }
+
+    private void deriveGroundItems() {
+        Instruction s = firstRef("Could not find supplied coord's world instance in obj_find.");
+        Function leafF = s == null ? null : getFunctionContaining(s.getAddress());
+        if (leafF == null) { notes.add("ground items: the obj_find leaf was not found"); return; }
+        for (Address f : callees(bodyOf(leafF))) {
+            List<Instruction> fl = linear(f, 60);
+            Instruction cmpId = null, node = null;
+            Address g = null;
+            for (int k = 0; k < fl.size(); k++) {
+                Instruction i = fl.get(k);
+                if (g == null && i.getMnemonicString().equals("CALL")) {
+                    Address c = callTarget(i);
+                    List<Instruction> gl = c == null ? new ArrayList<>() : linear(c, 3);
+                    if (!gl.isEmpty() && gl.get(0).toString().startsWith("MOV RCX,qword ptr [RDX + 0x")) g = c;
+                    continue;
+                }
+                if (g == null) continue;
+                Mem m = memOf(i);
+                if (m == null || !m.hasDisp || !m.index.isEmpty()) continue;
+                if (node == null && i.toString().startsWith("MOV RDX,qword ptr [RCX + ")) node = i;
+                else if (node != null && cmpId == null && i.toString().startsWith("CMP dword ptr [RDX + ")) cmpId = i;
+            }
+            if (g == null || node == null || cmpId == null) continue;
+            Instruction lists = linear(g, 1).get(0);
+            put("SCENE_OBJ_LISTS", memOf(lists).disp, "obj_find's per-tile list getter reads the world view's ground-item lists: " + at(lists));
+            put("OBJ_NODE_OBJ", memOf(node).disp, "obj_find's lookup takes the item off each list node: " + at(node));
+            put("OBJ_ID", memOf(cmpId).disp, "obj_find's lookup compares the item id: " + at(cmpId));
+            break;
+        }
+        if (val("OBJ_ID") < 0) { notes.add("ground items: obj_find's list walk was not recognised"); return; }
+        for (Instruction i : leaf("objCount", 120)) {
+            Mem m = memOf(i);
+            if (m != null && m.hasDisp && i.toString().startsWith("MOV EDX,dword ptr [") && m.disp != val("OBJ_ID") && m.disp >= 0x10 && m.disp < 0x80) {
+                put("OBJ_COUNT", m.disp, "the objCount binding hands this field to Lua: " + at(i));
+                break;
+            }
+        }
+    }
+
+    private void deriveItemDefs() {
+        List<Instruction> l = leaf("ocName", 40);
+        Address getter = null;
+        for (int k = 0; k < l.size() && getter == null; k++) {
+            if (!l.get(k).getMnemonicString().equals("CALL") || l.get(k).toString().contains("ptr")) continue;
+            Address c = callTarget(l.get(k));
+            Address cell = c == null ? null : cacheBuckets(c);
+            if (cell == null) continue;
+            getter = c;
+            put("ITEMDEF_CACHE", rva(cell), "the ocName binding's definition getter (rva 0x" + Long.toHexString(rva(c)) + ") loads its cache's buckets, count at +8");
+            for (int n = k + 1; n < l.size() && n < k + 6; n++) {
+                String t = l.get(n).toString();
+                if (t.startsWith("ADD RDX,0x")) {
+                    put("ITEMDEF_NAME", Long.parseLong(t.substring("ADD RDX,0x".length()), 16), "ocName hands def+N to Lua as the name: " + at(l.get(n)));
+                    break;
+                }
+            }
+        }
+        if (getter == null) { notes.add("item defs: the ocName leaf's getter was not recognised"); return; }
+        for (Instruction i : leaf("ocStackable", 40)) {
+            Mem m = memOf(i);
+            if (m != null && m.hasDisp && i.toString().startsWith("CMP dword ptr [") && i.toString().endsWith(",0x1")) {
+                put("ITEMDEF_STACKABLE", m.disp, "ocStackable tests this field == 1: " + at(i));
+                break;
+            }
+        }
+        for (Instruction i : leaf("ocCost", 40)) {
+            Mem m = memOf(i);
+            if (m != null && m.hasDisp && i.toString().startsWith("MOV EDX,dword ptr [") && m.disp > 0x10) {
+                put("ITEMDEF_COST", m.disp, "ocCost hands this field to Lua: " + at(i));
+                break;
+            }
+        }
+        List<Instruction> og = leaf("objGetOp", 160);
+        for (int k = 0; k < og.size(); k++) {
+            Instruction i = og.get(k);
+            if (!i.getMnemonicString().equals("CALL")) continue;
+            Address c = callTarget(i);
+            if (c == null || !stride40(c)) continue;
+            for (int b = k - 1; b >= 0 && b >= k - 6; b--) {
+                String t = og.get(b).toString();
+                Mem m = memOf(og.get(b));
+                if (t.startsWith("LEA RCX,[") && m != null && m.hasDisp && m.disp >= 0x40 && m.disp < 0x400) { put("ITEMDEF_GROUND_OPS", m.disp, "objGetOp hands def+N to the 0x40-stride option helper: " + at(og.get(b))); break; }
+                if (t.startsWith("ADD RCX,0x")) { put("ITEMDEF_GROUND_OPS", Long.parseLong(t.substring("ADD RCX,0x".length()), 16), "objGetOp hands def+N to the 0x40-stride option helper: " + at(og.get(b))); break; }
+            }
+            if (val("ITEMDEF_GROUND_OPS") >= 0) break;
+        }
+    }
+
+    /** A definition getter's cache: the qword/dword pair it loads first (buckets, count = buckets + 8). */
+    private Address cacheBuckets(Address getter) {
+        Address count = null, buckets = null;
+        for (Instruction i : linear(getter, 20)) {
+            Mem m = memOf(i);
+            if (m == null || m.absolute == null || !i.getMnemonicString().equals("MOV")) continue;
+            if (i.toString().contains("dword ptr") && count == null) count = m.absolute;
+            else if (i.toString().contains("qword ptr") && buckets == null) buckets = m.absolute;
+        }
+        return count != null && buckets != null && count.getOffset() == buckets.getOffset() + 8 ? buckets : null;
     }
 
     /** A grid tile probe: two-or-more IMULs off RCX with large displacements and a tile array load. */

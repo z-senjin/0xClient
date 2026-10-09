@@ -57,6 +57,8 @@ struct Hit {
     unsigned char dump[kDump];
     std::uint64_t frames[kFrames];  // return addresses, innermost first
     int nFrames;
+    std::int32_t sel[3];            // the "Use" selection {SEL_WIDGET, SEL_SLOT, SEL_ITEM} at the hit
+    bool selOk;
 };
 
 struct State {
@@ -104,6 +106,25 @@ inline void record(CONTEXT* c) {
         const std::uint64_t a = c->Rsp + 0x28 + k * 8;
         h.stack[k] = readableRaw(a, 8) ? *reinterpret_cast<std::uint64_t*>(a) : 0;
     }
+    // The "Use" selection, so a hook on a use-item sender shows which field holds what (offsets.hpp,
+    // USE ITEM ON: the slot/item order is the open question). Raw reads: this runs inside the handler.
+    h.selOk = false;
+    {
+        const std::uint64_t cl = s.base + off::CLIENT_OBJ_PTR;
+        if (off::CLIENT_OBJ_PTR && off::TARGET_STATE && readableRaw(cl, 8)) {
+            const std::uint64_t client = *reinterpret_cast<std::uint64_t*>(cl);
+            if (client && readableRaw(client + off::TARGET_STATE, 8)) {
+                const std::uint64_t st8 = *reinterpret_cast<std::uint64_t*>(client + off::TARGET_STATE);
+                const std::uint64_t sel = st8 + off::TARGET_SEL;
+                if (st8 && readableRaw(sel + off::SEL_WIDGET, 4) && readableRaw(sel + off::SEL_SLOT, 4) && readableRaw(sel + off::SEL_ITEM, 4)) {
+                    h.sel[0] = *reinterpret_cast<std::int32_t*>(sel + off::SEL_WIDGET);
+                    h.sel[1] = *reinterpret_cast<std::int32_t*>(sel + off::SEL_SLOT);
+                    h.sel[2] = *reinterpret_cast<std::int32_t*>(sel + off::SEL_ITEM);
+                    h.selOk = true;
+                }
+            }
+        }
+    }
     h.dumpFrom = (rva == s.entryCopyRva) ? c->Rdx + 0x100 : c->Rdx;
     h.dumpLen = readableRaw(h.dumpFrom, kDump) ? kDump : 0;
     if (h.dumpLen) std::memcpy(h.dump, reinterpret_cast<void*>(h.dumpFrom), kDump);
@@ -148,6 +169,10 @@ inline void print(const Hit& h) {
     std::string bt;
     for (int k = 0; k < h.nFrames; ++k) bt += " " + where(h.frames[k]);
     oxc::logf("[probe]   backtrace:%s\n", bt.c_str());
+    if (h.selOk) oxc::logf("[probe]   selection: +0x%llx=%d (as widget 0x%x)  +0x%llx=%d  +0x%llx=%d\n",
+                           static_cast<unsigned long long>(off::SEL_WIDGET), h.sel[0], static_cast<unsigned>(h.sel[0]),
+                           static_cast<unsigned long long>(off::SEL_SLOT), h.sel[1],
+                           static_cast<unsigned long long>(off::SEL_ITEM), h.sel[2]);
     if (h.dumpLen) {
         std::string d;
         const std::int32_t* w = reinterpret_cast<const std::int32_t*>(h.dump);

@@ -238,8 +238,8 @@ def infer_shifts(offsets, prev_offsets):
 #   opcode    a menu action number. Only a hook-and-log against a real click establishes it.
 #   constant  a number 0xClient chooses (a scan span, a depth cap). Not read from the game at all, so
 #             "carried" would be a lie: it is labelled "constant" and never reviewed as an offset.
-CODE_RVAS = {"BUILD_ID", "DO_ACTION", "WORLD_TO_SCREEN", "GET_VARBIT", "ACT_TICK", "ACT_WALK", "ACT_NPC_OP", "ACT_LOC_OP", "ACT_IF_OP"}
-GLOBAL_RVAS = {"CLIENT_OBJ_PTR", "VARP_ARRAY_PTR", "CONTAINER_BUCKETS", "CONTAINER_MASK", "IFACE_EMPTY_SENTINEL", "LOCDEF_CACHE"}
+CODE_RVAS = {"BUILD_ID", "DO_ACTION", "WORLD_TO_SCREEN", "GET_VARBIT", "ACT_TICK", "ACT_WALK", "ACT_NPC_OP", "ACT_LOC_OP", "ACT_IF_OP", "ACT_OBJ_OP", "ACT_ON_ITEM", "ACT_ON_LOC", "ACT_ON_NPC", "ACT_ON_OBJ"}
+GLOBAL_RVAS = {"CLIENT_OBJ_PTR", "VARP_ARRAY_PTR", "CONTAINER_BUCKETS", "CONTAINER_MASK", "IFACE_EMPTY_SENTINEL", "LOCDEF_CACHE", "ITEMDEF_CACHE"}
 OPCODES = set()   # since client-241-3 the OP_* numbers are 0xClient's own labels (client/actions.hpp)
 CONSTANTS = {"IFTYPE_SCAN_SPAN", "IFTYPE_CHAIN_MAX", "OPLOC1", "OPNPC1", "OPNPC2", "OPNPC3", "OPNPC4", "OPNPC5", "OP_WALK"}
 

@@ -73,6 +73,65 @@ public final class Inventory {
         return Natives.itemAction(WIDGET, slot, op, ids[slot]);
     }
 
+    /** The first slot holding an item with this name (ignoring case), or -1. */
+    public static int firstSlot(String name) {
+        int[] ids = ids();
+        for (int i = 0; i < ids.length; i++) if (ids[i] >= 0 && Items.named(ids[i], name)) return i;
+        return -1;
+    }
+
+    /** How many slots hold an item with this name (ignoring case). */
+    public static int count(String name) {
+        int n = 0;
+        for (int id : ids()) if (id >= 0 && Items.named(id, name)) n++;
+        return n;
+    }
+
+    /** The total amount of an item, summing stacks (coins, runes) and single slots alike. */
+    public static int amount(int itemId) {
+        int[] flat = Natives.container(CONTAINER);
+        int n = 0;
+        for (int i = 0; i + 1 < flat.length; i += 2) if (flat[i] == itemId) n += Math.max(0, flat[i + 1]);
+        return n;
+    }
+
+    /** True when an item with this name is in the inventory. */
+    public static boolean contains(String name) { return firstSlot(name) >= 0; }
+
+    /** How many slots are empty. */
+    public static int free() { int u = used(); return u < 0 ? 0 : SIZE - u; }
+
+    // "Use" the item in a slot on something -- the client's own use-item senders (offsets.hpp, USE ITEM ON).
+    // Derived from client-241-3, not yet seen working.
+
+    /** Use the item in {@code slot} on the item in {@code targetSlot} (e.g. tinderbox on logs). */
+    public static boolean useOn(int slot, int targetSlot) {
+        int[] ids = ids();
+        if (slot < 0 || targetSlot < 0 || slot >= ids.length || targetSlot >= ids.length || ids[slot] < 0 || ids[targetSlot] < 0) return false;
+        return Natives.useItemOn(6, WIDGET, slot, ids[slot], WIDGET, targetSlot, ids[targetSlot]);
+    }
+
+    /** Use the item in {@code slot} on a scenery object (e.g. raw fish on a range). */
+    public static boolean useOn(int slot, Scenery.SceneObject o) {
+        int[] ids = ids();
+        if (o == null || slot < 0 || slot >= ids.length || ids[slot] < 0) return false;
+        return Natives.useItemOn(7, WIDGET, slot, ids[slot], o.sceneX(), o.sceneY(), o.id());
+    }
+
+    /** Use the item in {@code slot} on an NPC. */
+    public static boolean useOn(int slot, Entity npc) {
+        int[] ids = ids();
+        if (npc == null || slot < 0 || slot >= ids.length || ids[slot] < 0) return false;
+        return Natives.useItemOn(8, WIDGET, slot, ids[slot], 0, 0, npc.uid());
+    }
+
+    /** Use the item in {@code slot} on a ground item. */
+    public static boolean useOn(int slot, GroundItems.GroundItem g) {
+        int[] ids = ids();
+        if (g == null || slot < 0 || slot >= ids.length || ids[slot] < 0) return false;
+        return Natives.useItemOn(9, WIDGET, slot, ids[slot], g.sceneX(), g.sceneY(), g.id());
+    }
+
     private static boolean contains(int[] set, int v) {
         for (int s : set) if (s == v) return true;
         return false;

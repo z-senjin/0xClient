@@ -82,7 +82,10 @@ public final class OxClient {
             new oxclient.plugins.MntnChopper(),
             // Inspector: your location and the ids of NPCs, scenery and items. Off by default; appended
             // last (positional indices).
-            new oxclient.plugins.Inspector()
+            new oxclient.plugins.Inspector(),
+            // Account Builder: trains skills from a text plan on oxclient.framework. Off by default;
+            // appended last (positional indices).
+            new oxclient.plugins.AccountBuilder()
     ));
 
     // The overlay image, reused between frames. Reallocating eight megabytes thirty times a second

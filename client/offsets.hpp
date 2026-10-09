@@ -157,6 +157,62 @@ inline std::uintptr_t ACT_LOC_OP = 0;
 // is refused by the mask check above rather than doing something else.
 inline std::uintptr_t ACT_IF_OP  = 0;
 
+// GROUND ITEMS: the option sender for an item lying on the ground ("Take" and the rest).
+//
+//   ACT_OBJ_OP  void objOp(void*, int itemId, int quantity, int args[7], int op, int flag)
+//               args = {level, worldX, worldY, itemId, quantity, op, flag}; op 1..5
+//
+// HOW FOUND (client-241-3, 2026-10-09, static): the menu-entry thunk 0x3893d0 unpacks exactly that block
+// ([rdx+0xc] id, [rdx+0x10] quantity, [rdx+0x14] op, [rdx+0x18] flag) and calls 0x389400, which switches
+// on the option (packets 0x47, 0x62, 0x41, 0x3f, 0x09) and hands id + quantity to the helper 0x389d50,
+// whose lookup 0x9d8e0 compares both against the stack ([obj+0x20] id, [obj+0x24] quantity).
+// AUTOMATED (derive5): the only four-plus-packet sender that loads its option from the stack in its
+// prologue and tests it with CMP ECX,1. Hook-and-log 2026-10-09: the client's own Take on a dropped log
+// called it as (1511, 1, args, 3, 0) -- the layout above, Take = option 3. 0xClient's own call not yet seen.
+inline std::uintptr_t ACT_OBJ_OP = 0;
+
+// USE ITEM ON ... ("Use" an inventory item, then click the target). The client keeps the item you picked
+// with "Use" in a SELECTION, and each target sender reads it from there rather than taking it as an
+// argument:
+//
+//   selection = *(client + TARGET_STATE) + TARGET_SEL
+//       +SEL_WIDGET  the packed component the item is in (the inventory, 0x950000)
+//       +SEL_SLOT    its slot
+//       +SEL_ITEM    its item id
+//
+//   ACT_ON_ITEM  void(void*, int target[3])           target = {widget, slot, itemId}   item on item
+//   ACT_ON_LOC   void(void*, int args[6])             args = {level, worldX, worldY, locId, locId, 0}
+//                (the client's own "Use Logs -> Bank booth" passed {0, 3091, 3243, 10355, 10355, 0}, hooked live)
+//   ACT_ON_NPC   void(void*, int args[1])             args = {npc uid}
+//   ACT_ON_OBJ   void(void*, int args[4])             args = {level, worldX, worldY, itemId}  (on ground)
+//
+// actions.hpp sets the selection to the item for the length of one call, on the game thread, and puts
+// back what was there -- the senders only READ it (none checks a "selected" flag), so nothing else in the
+// client sees the change. This is the one place actions.hpp writes game memory.
+//
+// HOW FOUND (client-241-3, 2026-10-09, static): 0x83c70 is `call 0x83c60; add rax,0x7d0; ret` and 0x83c60
+// is `mov rax,[rcx+0x4133f0]; ret`. Every sender that calls it is a one-packet "use on" sender:
+// 0x387b30 (packet 0x08) writes [sel+0x94] and [sel+0x98] as shorts and [sel+0x90] as a 4-byte int --
+// so +0x90 is the component -- around the object's {+4 x, +8 y, +0xc id}; 0x388630 (0x3e) looks the NPC
+// up by uid; 0x389240 (0x5e) carries a ground item's {x, y, id}; 0x38cf70 (0x0f) resolves a component
+// from {widget, slot} the way ACT_IF_OP does. Each shares a post-click helper with its family's own
+// option sender (0x388550 with ACT_LOC_OP, 0x389210 with ACT_NPC_OP, 0x389d50 with ACT_OBJ_OP).
+// AUTOMATED (derive5): the selection getter is the `call; add rax,IMM; ret` the senders share; each
+// "use on" sender is the selection reader that shares a rarely called helper with its family.
+// VERIFIED LIVE 2026-10-09 (client-241-3, hook-and-log): the client's own "Use Tinderbox -> Logs" called
+// ACT_ON_ITEM with target {0x950000, 2, 1511} while the selection held +0x90 = 0x950000, +0x94 = 1 (the
+// slot), +0x98 = 590 (the tinderbox) -- the field order and the target layout are as above. 0xClient's own
+// call through a "use on" sender has not been seen yet.
+inline std::uintptr_t TARGET_STATE = 0x4133F0;  // field on the client object (pointer)
+inline std::uintptr_t TARGET_SEL   = 0x7D0;     // added to it: the selection
+inline std::uintptr_t SEL_WIDGET   = 0x90;      // field on the selection (int)
+inline std::uintptr_t SEL_SLOT     = 0x94;      // field on the selection (int)
+inline std::uintptr_t SEL_ITEM     = 0x98;      // field on the selection (int)
+inline std::uintptr_t ACT_ON_ITEM  = 0;
+inline std::uintptr_t ACT_ON_LOC   = 0;
+inline std::uintptr_t ACT_ON_NPC   = 0;
+inline std::uintptr_t ACT_ON_OBJ   = 0;
+
 // The client's world->screen projection leaf. Takes {fineX, fineY, fineZ} and writes {screenX, screenY}.
 // "Fine" coordinates are tiles << 7 (i.e. 128 units per tile). It reads the camera out of the client
 // object itself, so the first argument is ignored -- pass nullptr.
@@ -554,6 +610,42 @@ inline std::uintptr_t LOCDEF_NAME     = 0x40;   // field on a loc definition (Nx
 // the entry. AUTOMATED (derive4): that ADD after the name read, handed to a 0x40-stride helper.
 // NOT VERIFIED LIVE.
 inline std::uintptr_t LOCDEF_OPS      = 0xE8;   // field on a loc definition (vector of 0x40-byte entries)
+
+// ---------------------------------------------------------------------------------------------------
+// GROUND ITEMS -- client/items.hpp
+// ---------------------------------------------------------------------------------------------------
+// The scene keeps one list of items per tile:
+//     lists = *(scene + SCENE_OBJ_LISTS)
+//     head  = *( *(lists + 0x10 + level*0x18) + 0x10 + localX*0x18 ) + localY*0x18
+// head is the sentinel of a circular list: node = *head ... while node != head, next = *node; each node
+// holds the item at node + OBJ_NODE_OBJ; an item has its id at OBJ_ID and its quantity at OBJ_COUNT.
+// HOW FOUND (client-241-3, 2026-10-09, static): the obj_find Lua binding (its leaf names itself in "Could
+// not find supplied coord's world instance in obj_find.") calls 0x9d980, which calls the list getter
+// 0x9d8b0 (`mov rcx,[rdx+0x140]`, then two `[r + idx*0x18 + 0x10]` steps and `+ idx*0x18`) and walks it:
+// `mov rdx,[rcx+0x18]; cmp dword [rdx+0x20],id`. The objCount binding reads [obj+0x24].
+// AUTOMATED (derive5). The 0x10 / 0x18 vector shape is a constant of the container (items.hpp).
+// VERIFIED LIVE 2026-10-09: the self-check read the Cheese and Tomato lying near Lumbridge (1985 x1, 1982 x1).
+inline std::uintptr_t SCENE_OBJ_LISTS = 0x140;  // field on the scene object (pointer)
+inline std::uintptr_t OBJ_NODE_OBJ    = 0x18;   // field on a list node (pointer to the item)
+inline std::uintptr_t OBJ_ID          = 0x20;   // field on a ground item (int)
+inline std::uintptr_t OBJ_COUNT       = 0x24;   // field on a ground item (int)
+
+// ---------------------------------------------------------------------------------------------------
+// ITEM DEFINITIONS -- client/items.hpp
+// ---------------------------------------------------------------------------------------------------
+// The same cache shape as LOCDEF_CACHE: a global bucket array (count at +8), nodes {u64 id, ctrl, def,
+// ..., next at +0x40}. Fields on a definition: the name (NxtString), "stackable" (== 1), the shop value,
+// and the ground options (a vector of 0x40-byte entries, like LOCDEF_OPS).
+// HOW FOUND (client-241-3, 2026-10-09, static): the ocName binding calls the getter 0x5f5cd0 (`mov r8d,
+// [0xde1338]; div; mov rcx,[0xde1330]` ... `cmp r14,[rdx]` / `mov rdx,[rdx+0x40]`) and hands def+0x8 to
+// Lua; ocStackable tests `[def+0xd4] == 1`; ocCost hands `[def+0xd8]`; objGetOp hands def+0xf0 to the
+// option helper 0x5e63b0. AUTOMATED (derive5). Cache + name VERIFIED LIVE 2026-10-09 (the self-check named
+// every carried item: Bronze pickaxe, Tinderbox, Logs); stackable, value and ground options not yet checked.
+inline std::uintptr_t ITEMDEF_CACHE      = 0;      // global (rva of the bucket-array pointer)
+inline std::uintptr_t ITEMDEF_NAME       = 0x8;    // field on an item definition (NxtString)
+inline std::uintptr_t ITEMDEF_STACKABLE  = 0xD4;   // field on an item definition (int, 1 = stackable)
+inline std::uintptr_t ITEMDEF_COST       = 0xD8;   // field on an item definition (int, shop value)
+inline std::uintptr_t ITEMDEF_GROUND_OPS = 0xF0;   // field on an item definition (vector of 0x40-byte entries)
 
 // ---------------------------------------------------------------------------------------------------
 // FIELDS ON AN ENTITY (a player or an NPC)

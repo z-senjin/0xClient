@@ -30,14 +30,16 @@
 namespace oxc {
 namespace actions {
 
-enum Kind : int { Walk = 1, Npc = 2, Loc = 3, IfOp = 4 };
+enum Kind : int { Walk = 1, Npc = 2, Loc = 3, IfOp = 4, ObjOp = 5, OnItem = 6, OnLoc = 7, OnNpc = 8, OnObj = 9 };
 
 struct Act {
     int kind = 0;
-    int a = 0, b = 0, c = 0;   // Walk: level, worldX, worldY   Npc: uid   Loc: level, worldX, worldY
-                               // IfOp: widgetId, slot
-    int id = 0;                // Loc: object id   IfOp: item id
-    int op = 0;                // Npc/Loc: option 1..5   IfOp: option 1..10
+    int a = 0, b = 0, c = 0;   // Walk/Loc/ObjOp/OnLoc/OnObj: level, worldX, worldY   Npc/OnNpc: uid
+                               // IfOp/OnItem: widgetId, slot
+    int id = 0;                // Loc/OnLoc: object id   IfOp/OnItem/ObjOp/OnObj: item id
+    int op = 0;                // Npc/Loc/ObjOp: option 1..5   IfOp: option 1..10
+    int qty = 0;               // ObjOp: the ground stack's quantity
+    int sw = 0, ss = 0, si = 0;  // On*: the item being used -- widget, slot, item id
 };
 
 struct Done {                  // what pump() did, for the DLL loop to log
@@ -67,9 +69,63 @@ using WalkFn = void (*)(void*, int*);
 using NpcFn = void (*)(void*, std::uintptr_t, int, int);
 using LocFn = void (*)(void*, int, int*, int, int);
 using IfOpFn = void (*)(void*, int, int, int, int, int, char);
+using ObjOpFn = void (*)(void*, int, int, int*, int, int);
+using OnFn = void (*)(void*, int*);
+
+// ---------------------------------------------------------------------------------------------------
+// Varbits. The client's own reader (GET_VARBIT) loads a varbit's definition on first use, which is only
+// safe on the game thread -- so a caller registers the ids it wants (varbit()) and pump() refreshes all of
+// them every frame. A value is -1 until the first refresh after it was registered.
+// ---------------------------------------------------------------------------------------------------
+constexpr int kVarbits = 64;
+
+struct Varbits {
+    std::atomic<int> ids[kVarbits];
+    std::atomic<int> values[kVarbits];
+    std::atomic<int> count{0};
+    Varbits() { for (int i = 0; i < kVarbits; ++i) { ids[i].store(-1); values[i].store(-1); } }
+};
+
+inline Varbits& varbits() {
+    static Varbits v;
+    return v;
+}
+
+using VarbitFn = unsigned (*)(int);
+
+inline void refreshVarbits() {
+    if (!off::GET_VARBIT) return;
+    Varbits& v = varbits();
+    const int n = v.count.load();
+    const auto fn = reinterpret_cast<VarbitFn>(moduleBase() + off::GET_VARBIT);
+    for (int i = 0; i < n && i < kVarbits; ++i) {
+        const int id = v.ids[i].load();
+        if (id >= 0) v.values[i].store(static_cast<int>(fn(id)));
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------
+// "Use item on ..." -- point the client's selection at the item for one call (offsets.hpp, USE ITEM ON).
+// ---------------------------------------------------------------------------------------------------
+inline bool withSelection(const Act& a, std::uintptr_t sender, int* args) {
+    const std::uintptr_t state = rdp(clientObj() + off::TARGET_STATE);
+    if (!state) return false;
+    const std::uintptr_t sel = state + off::TARGET_SEL;
+    auto* w = reinterpret_cast<std::int32_t*>(sel + off::SEL_WIDGET);
+    auto* sl = reinterpret_cast<std::int32_t*>(sel + off::SEL_SLOT);
+    auto* it = reinterpret_cast<std::int32_t*>(sel + off::SEL_ITEM);
+    if (!readable(reinterpret_cast<std::uintptr_t>(w), 4) || !readable(reinterpret_cast<std::uintptr_t>(sl), 4) ||
+        !readable(reinterpret_cast<std::uintptr_t>(it), 4)) return false;
+    const std::int32_t ow = *w, os = *sl, oi = *it;
+    *w = a.sw; *sl = a.ss; *it = a.si;
+    reinterpret_cast<OnFn>(moduleBase() + sender)(nullptr, args);
+    *w = ow; *sl = os; *it = oi;
+    return true;
+}
 
 // Runs on the game thread, from the tick breakpoint. One action per frame.
 inline void pump(CONTEXT*) {
+    refreshVarbits();
     State& s = st();
     const std::uint32_t t = s.tail.load();
     if (t == s.head.load()) return;
@@ -91,6 +147,23 @@ inline void pump(CONTEXT*) {
     } else if (a.kind == IfOp) {
         // {widget, slot, op, subop 0, item, flag 0} -- the menu-entry callback's own layout (offsets.hpp)
         reinterpret_cast<IfOpFn>(base + off::ACT_IF_OP)(nullptr, a.a, a.b, a.op, 0, a.id, 0);
+    } else if (a.kind == ObjOp) {
+        // {level, x, y, id, quantity, op, flag} -- the menu thunk 0x3893d0's block (offsets.hpp)
+        int args[7] = {a.a, a.b, a.c, a.id, a.qty, a.op, 0};
+        reinterpret_cast<ObjOpFn>(base + off::ACT_OBJ_OP)(nullptr, a.id, a.qty, args, a.op, 0);
+    } else if (a.kind == OnItem) {
+        int args[3] = {a.a, a.b, a.id};
+        if (!withSelection(a, off::ACT_ON_ITEM, args)) d.result = -2;
+    } else if (a.kind == OnLoc) {
+        // {level, x, y, id, id, 0}: the client's own "Use Logs -> Bank booth" passed the id twice (hooked live)
+        int args[6] = {a.a, a.b, a.c, a.id, a.id, 0};
+        if (!withSelection(a, off::ACT_ON_LOC, args)) d.result = -2;
+    } else if (a.kind == OnNpc) {
+        int args[1] = {a.a};
+        if (!withSelection(a, off::ACT_ON_NPC, args)) d.result = -2;
+    } else if (a.kind == OnObj) {
+        int args[4] = {a.a, a.b, a.c, a.id};
+        if (!withSelection(a, off::ACT_ON_OBJ, args)) d.result = -2;
     }
     const std::uint32_t i = s.doneHead.load();
     s.done[i % kQueue] = d;
@@ -113,12 +186,37 @@ inline const char* unavailable() {
     return nullptr;
 }
 
+/// The sender a kind needs, or 0 when that sender is not measured on this build.
+inline std::uintptr_t senderFor(int kind) {
+    switch (kind) {
+        case IfOp: return off::ACT_IF_OP;
+        case ObjOp: return off::ACT_OBJ_OP;
+        case OnItem: return off::ACT_ON_ITEM;
+        case OnLoc: return off::ACT_ON_LOC;
+        case OnNpc: return off::ACT_ON_NPC;
+        case OnObj: return off::ACT_ON_OBJ;
+        default: return 1;   // Walk/Npc/Loc: covered by unavailable()
+    }
+}
+
+inline const char* kindName(int kind) {
+    switch (kind) {
+        case IfOp: return "item/interface options (ACT_IF_OP)";
+        case ObjOp: return "ground item options (ACT_OBJ_OP)";
+        case OnItem: return "use item on item (ACT_ON_ITEM)";
+        case OnLoc: return "use item on object (ACT_ON_LOC)";
+        case OnNpc: return "use item on NPC (ACT_ON_NPC)";
+        case OnObj: return "use item on ground item (ACT_ON_OBJ)";
+        default: return "?";
+    }
+}
+
 inline bool submit(const Act& a) {
-    if (a.kind == IfOp && !off::ACT_IF_OP) {
-        static bool warnedIf = false;
-        if (!warnedIf) {
-            warnedIf = true;
-            oxc::logf("[actions] dropped: ACT_IF_OP (item options) was not derived for this build\n");
+    if (!senderFor(a.kind)) {
+        static bool warnedKind[16] = {};
+        if (a.kind >= 0 && a.kind < 16 && !warnedKind[a.kind]) {
+            warnedKind[a.kind] = true;
+            oxc::logf("[actions] dropped: %s was not derived for this build\n", kindName(a.kind));
         }
         return false;
     }
@@ -164,7 +262,14 @@ inline void tick() {
         if (a.kind == Walk) oxc::logf("[actions] walk to (%d,%d) plane %d: sent\n", a.b, a.c, a.a);
         else if (a.kind == Npc) oxc::logf("[actions] NPC uid %d option %d: %s\n", a.a, a.op, d.result > 0 ? "sent" : "not found, dropped");
         else if (a.kind == Loc) oxc::logf("[actions] object %d at (%d,%d) option %d: sent\n", a.id, a.b, a.c, a.op);
-        else oxc::logf("[actions] item %d in widget 0x%x slot %d option %d: sent\n", a.id, static_cast<unsigned>(a.a), a.b, a.op);
+        else if (a.kind == IfOp) oxc::logf("[actions] item %d in widget 0x%x slot %d option %d: sent\n", a.id, static_cast<unsigned>(a.a), a.b, a.op);
+        else if (a.kind == ObjOp) oxc::logf("[actions] ground item %d x%d at (%d,%d) option %d: sent\n", a.id, a.qty, a.b, a.c, a.op);
+        else {
+            const char* what = a.kind == OnItem ? "item" : a.kind == OnLoc ? "object" : a.kind == OnNpc ? "NPC" : "ground item";
+            if (d.result == -2) oxc::logf("[actions] use item %d on %s: dropped, the selection was not readable\n", a.si, what);
+            else oxc::logf("[actions] use item %d (widget 0x%x slot %d) on %s %d at (%d,%d): sent\n",
+                           a.si, static_cast<unsigned>(a.sw), a.ss, what, a.kind == OnNpc ? a.a : a.id, a.b, a.c);
+        }
     }
 }
 
@@ -208,6 +313,53 @@ inline bool walkTo(int sceneX, int sceneY) {
     return doAction(sceneX, sceneY, off::OP_WALK, 0);
 }
 
+/// The level the local player is on (0 when unknown).
+inline int myLevel() {
+    bool f = false;
+    const Entity me = localPlayer(f);
+    return f ? actions::planeOf(me) : 0;
+}
+
+/// Take option `op` (1..5) on the ground item `itemId` (a stack of `quantity`) at SCENE tile (sx, sy).
+inline bool groundItemAction(int sceneX, int sceneY, int itemId, int quantity, int op) {
+    if (!clientObj() || op < 1 || op > 5 || itemId < 0) return false;
+    const Tile b = sceneBase();
+    if (!b.ok) return false;
+    actions::Act a;
+    a.kind = actions::ObjOp; a.a = myLevel(); a.b = b.x + sceneX; a.c = b.y + sceneY; a.id = itemId; a.qty = quantity; a.op = op;
+    return actions::submit(a);
+}
+
+/// "Use" the item (srcWidget, srcSlot, srcItem) on a target. kind: 6 item (tx = widget, ty = slot,
+/// targetId = item), 7 object (tx, ty = SCENE tile, targetId = loc id), 8 NPC (targetId = uid),
+/// 9 ground item (tx, ty = SCENE tile, targetId = item id).
+inline bool useItemOn(int kind, int srcWidget, int srcSlot, int srcItem, int tx, int ty, int targetId) {
+    if (!clientObj() || srcItem < 0 || srcSlot < 0) return false;
+    actions::Act a;
+    a.kind = kind; a.sw = srcWidget; a.ss = srcSlot; a.si = srcItem; a.id = targetId;
+    if (kind == actions::OnItem) { a.a = tx; a.b = ty; }
+    else if (kind == actions::OnNpc) { a.a = targetId; }
+    else if (kind == actions::OnLoc || kind == actions::OnObj) {
+        const Tile b = sceneBase();
+        if (!b.ok) return false;
+        a.a = myLevel(); a.b = b.x + tx; a.c = b.y + ty;
+    } else return false;
+    return actions::submit(a);
+}
+
+/// A varbit's value as of the last frame, or -1 until it has been read once (registering the id is what
+/// starts the reads -- see actions::Varbits). Needs actions armed; -1 forever when they are not.
+inline int varbit(int id) {
+    if (id < 0) return -1;
+    actions::Varbits& v = actions::varbits();
+    const int n = v.count.load();
+    for (int i = 0; i < n && i < actions::kVarbits; ++i) if (v.ids[i].load() == id) return v.values[i].load();
+    if (n >= actions::kVarbits) return -1;
+    int expected = n;
+    if (v.count.compare_exchange_strong(expected, n + 1)) v.ids[n].store(id);
+    return -1;
+}
+
 /// Take option `op` (1..5, as numbered in the object's right-click menu) on the scenery object `id`
 /// whose origin is SCENE tile (sceneX, sceneY) -- the same call a click on that option makes. Queued; false
 /// when dropped.
@@ -230,7 +382,8 @@ inline bool objectAction(int sceneX, int sceneY, int id, int op) {
 /// Returns true when QUEUED; false when dropped (ACT_IF_OP not measured, actions unavailable, bad
 /// arguments, full queue).
 inline bool itemAction(int widgetId, int slot, int op, int itemId) {
-    if (!clientObj() || slot < 0 || op < 1 || op > 10 || itemId < 0) return false;
+    // slot and item are -1 for a plain interface button (a component that is not an item slot)
+    if (!clientObj() || slot < -1 || op < 1 || op > 10 || itemId < -1) return false;
     actions::Act a;
     a.kind = actions::IfOp; a.a = widgetId; a.b = slot; a.op = op; a.id = itemId;
     return actions::submit(a);

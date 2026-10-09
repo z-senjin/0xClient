@@ -128,6 +128,38 @@ public final class Natives {
      */
     public static native boolean objectAction(int sceneX, int sceneY, int id, int op);
 
+    /** Items on the ground within {@code radius} tiles on your floor: {@code {id, quantity, sceneX, sceneY}} each. */
+    public static native int[] groundItems(int radius);
+
+    /** An item's name from the client's definitions, or "" when it is not cached right now. */
+    public static native String itemName(int id);
+
+    /** {@code {stackable 0/1, shop value}}, or {@code {-1, -1}} when the definition is not cached. */
+    public static native int[] itemInfo(int id);
+
+    /** An item's five ground options, newline-separated (option n is line n), or "" when not cached. */
+    public static native String itemGroundOptions(int id);
+
+    /** Option {@code op} (1..5) on a ground item stack at a SCENE tile. Queued; false when dropped. */
+    public static native boolean groundItemAction(int sceneX, int sceneY, int id, int quantity, int op);
+
+    /**
+     * "Use" the item in {@code (srcWidget, srcSlot)} (id {@code srcItem}) on a target. {@code kind}: 6 item
+     * ({@code tx} = widget, {@code ty} = slot, {@code targetId} = item), 7 object ({@code tx, ty} = SCENE
+     * tile, {@code targetId} = loc id), 8 NPC ({@code targetId} = uid), 9 ground item (SCENE tile, item id).
+     * Queued; false when dropped.
+     */
+    public static native boolean useItemOn(int kind, int srcWidget, int srcSlot, int srcItem, int tx, int ty, int targetId);
+
+    /** A varbit as of the last frame, or -1 until it has been read once (the first call registers it). */
+    public static native int varbit(int id);
+
+    /**
+     * The text of one interface group's components and their dynamic children, one per line:
+     * {@code "component child hidden text"} (child -1 for the component itself). "" when not loaded.
+     */
+    public static native String groupText(int group);
+
     /** The game's client area on screen: {@code {x, y, width, height}}. */
     public static native int[] viewport();
 

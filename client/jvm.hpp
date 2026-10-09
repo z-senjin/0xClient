@@ -29,6 +29,7 @@
 #include "game.hpp"
 #include "actions.hpp"
 #include "scenery.hpp"
+#include "items.hpp"
 #include "overlay.hpp"
 #include "panel.hpp"
 
@@ -531,6 +532,99 @@ inline jstring JNICALL nLocOptions(JNIEnv* env, jclass, jint id) {
         any = any || !ops[i].empty();
     }
     return gameBytesToJString(env, any ? joined : std::string{});
+}
+
+/// Items on the ground within `radius` tiles of you, on your floor, four ints each: {id, quantity,
+/// sceneX, sceneY}. Empty before you spawn (items.hpp).
+inline jintArray JNICALL nGroundItems(JNIEnv* env, jclass, jint radius) {
+    bool found = false;
+    const Entity me = localPlayer(found);
+    if (!found) return env->NewIntArray(0);
+    const int r = radius < 0 ? 0 : radius > 52 ? 52 : radius;
+    std::vector<jint> flat;
+    forEachGroundItem(me.plane >= 0 ? me.plane : 0, me.sceneX, me.sceneY, r, [&](const GroundItem& g) {
+        flat.push_back(g.id); flat.push_back(g.quantity); flat.push_back(g.sceneX); flat.push_back(g.sceneY);
+    });
+    jintArray arr = env->NewIntArray(static_cast<jsize>(flat.size()));
+    if (arr && !flat.empty()) env->SetIntArrayRegion(arr, 0, static_cast<jsize>(flat.size()), flat.data());
+    return arr;
+}
+
+/// An item's name from the client's definition cache, or "" when it is not cached right now.
+inline jstring JNICALL nItemName(JNIEnv* env, jclass, jint id) {
+    return gameBytesToJString(env, itemName(id));
+}
+
+/// {stackable 0/1, shop value}, or {-1, -1} when the definition is not cached.
+inline jintArray JNICALL nItemInfo(JNIEnv* env, jclass, jint id) {
+    const auto v = itemInfo(id);
+    jint out[2] = {v[0], v[1]};
+    jintArray arr = env->NewIntArray(2);
+    if (arr) env->SetIntArrayRegion(arr, 0, 2, out);
+    return arr;
+}
+
+/// An item's five ground options, newline-separated (like locOptions), or "" when not cached.
+inline jstring JNICALL nItemGroundOptions(JNIEnv* env, jclass, jint id) {
+    const auto ops = itemGroundOptions(id);
+    std::string joined;
+    bool any = false;
+    for (int i = 0; i < 5; ++i) { if (i) joined += '\n'; joined += ops[i]; any = any || !ops[i].empty(); }
+    return gameBytesToJString(env, any ? joined : std::string{});
+}
+
+/// Option `op` (1..5) on a ground item stack at SCENE tile (sx, sy). Queued; false when dropped.
+inline jboolean JNICALL nGroundItemAction(JNIEnv*, jclass, jint sx, jint sy, jint id, jint qty, jint op) {
+    return groundItemAction(sx, sy, id, qty, op) ? JNI_TRUE : JNI_FALSE;
+}
+
+/// "Use" an item on a target (actions.hpp, useItemOn). Queued; false when dropped.
+inline jboolean JNICALL nUseItemOn(JNIEnv*, jclass, jint kind, jint sw, jint ss, jint si, jint tx, jint ty, jint tid) {
+    return useItemOn(kind, sw, ss, si, tx, ty, tid) ? JNI_TRUE : JNI_FALSE;
+}
+
+/// A varbit, read by the client's own reader on the game thread; -1 until the first read (actions.hpp).
+inline jint JNICALL nVarbit(JNIEnv*, jclass, jint id) {
+    return (id < 0 || id > 65535) ? -1 : varbit(id);
+}
+
+/// Every text-bearing component of one interface group, and of their dynamic children, one per line:
+/// "component child hidden text" (child -1 for the component itself, hidden 0/1). "" when the group is not
+/// loaded. This is how Java reads dialogues, the chatbox's game messages and the Grand Exchange's labels
+/// without a coordinate: by the text the client already holds (IFTYPE_TEXT, verified on 241-3).
+inline jstring JNICALL nGroupText(JNIEnv* env, jclass, jint group) {
+    std::string out;
+    if (group < 0 || group > 0xFFFF) return gameBytesToJString(env, out);
+    auto add = [&](int comp, int child, std::uintptr_t w) {
+        std::string t = nxtString(w + off::IFTYPE_TEXT, 1000);
+        if (t.empty()) return;
+        for (char& ch : t) if (ch == '\n' || ch == '\r') ch = ' ';
+        const int hidden = rd<std::uint8_t>(w + off::IFTYPE_HIDDEN) != 0 ? 1 : 0;
+        out += std::to_string(comp) + " " + std::to_string(child) + " " + std::to_string(hidden) + " " + t + "\n";
+    };
+    // the group's component count, read the way widgetObj() reads it
+    std::uint64_t ccount = 0;
+    if (const std::uintptr_t c = clientObj()) {
+        const std::uintptr_t mgr = rdp(c + off::IFACE_MANAGER);
+        const std::uint64_t gcount = mgr ? rd<std::uint64_t>(mgr + off::IFACE_GROUP_COUNT) : 0;
+        const std::uintptr_t garr = mgr ? rdp(mgr + off::IFACE_GROUP_ARRAY) : 0;
+        if (garr && static_cast<std::uint64_t>(group) < gcount && gcount <= 0x1000)
+            ccount = rd<std::uint64_t>(garr + static_cast<std::uintptr_t>(group) * off::IFACE_GROUP_ENTRY_STRIDE + off::IFACE_GROUP_ENTRY_COUNT);
+    }
+    if (ccount > 2048) ccount = 2048;
+    for (int comp = 0; comp < static_cast<int>(ccount) && out.size() < 65536; ++comp) {
+        const std::uintptr_t w = widgetObj((group << 16) | comp);
+        if (!w) continue;
+        add(comp, -1, w);
+        const std::uint64_t cnt = rd<std::uint64_t>(w + off::IFTYPE_CHILDREN_COUNT);
+        const std::uintptr_t data = rdp(w + off::IFTYPE_CHILDREN_DATA);
+        if (!data || cnt == 0 || cnt > 2048) continue;
+        for (std::uint64_t i = 0; i < cnt && out.size() < 65536; ++i) {
+            const std::uintptr_t c = rdp(data + i * 16 + 8);
+            if (c) add(comp, static_cast<int>(i), c);
+        }
+    }
+    return gameBytesToJString(env, out);
 }
 
 /// Take option `op` (1..5) on scenery object `id` at SCENE tile (sx, sy). Queued; false when dropped.
@@ -1440,6 +1534,14 @@ inline bool startJvm(const std::wstring& javaHome, const std::wstring& jarPath, 
         { const_cast<char*>("locName"),     const_cast<char*>("(I)Ljava/lang/String;"), reinterpret_cast<void*>(nLocName) },
         { const_cast<char*>("locOptions"),  const_cast<char*>("(I)Ljava/lang/String;"), reinterpret_cast<void*>(nLocOptions) },
         { const_cast<char*>("objectAction"),const_cast<char*>("(IIII)Z"), reinterpret_cast<void*>(nObjectAction) },
+        { const_cast<char*>("groundItems"), const_cast<char*>("(I)[I"),   reinterpret_cast<void*>(nGroundItems) },
+        { const_cast<char*>("itemName"),    const_cast<char*>("(I)Ljava/lang/String;"), reinterpret_cast<void*>(nItemName) },
+        { const_cast<char*>("itemInfo"),    const_cast<char*>("(I)[I"),   reinterpret_cast<void*>(nItemInfo) },
+        { const_cast<char*>("itemGroundOptions"), const_cast<char*>("(I)Ljava/lang/String;"), reinterpret_cast<void*>(nItemGroundOptions) },
+        { const_cast<char*>("groundItemAction"), const_cast<char*>("(IIIII)Z"), reinterpret_cast<void*>(nGroundItemAction) },
+        { const_cast<char*>("useItemOn"),   const_cast<char*>("(IIIIIII)Z"), reinterpret_cast<void*>(nUseItemOn) },
+        { const_cast<char*>("varbit"),      const_cast<char*>("(I)I"),    reinterpret_cast<void*>(nVarbit) },
+        { const_cast<char*>("groupText"),   const_cast<char*>("(I)Ljava/lang/String;"), reinterpret_cast<void*>(nGroupText) },
         { const_cast<char*>("viewport"),    const_cast<char*>("()[I"),    reinterpret_cast<void*>(nViewport) },
         { const_cast<char*>("input"),       const_cast<char*>("()[I"),    reinterpret_cast<void*>(nInput) },
         { const_cast<char*>("mouse"),       const_cast<char*>("()[I"),    reinterpret_cast<void*>(nMouse) },

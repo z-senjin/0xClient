@@ -246,9 +246,10 @@ inline bool measured(const std::string& name) {
 
 inline std::string kindFallback(const std::string& name) {
     static const char* code[] = {"BUILD_ID", "DO_ACTION", "WORLD_TO_SCREEN", "GET_VARBIT",
-                                 "ACT_TICK", "ACT_WALK", "ACT_NPC_OP", "ACT_LOC_OP", "ACT_IF_OP"};
+                                 "ACT_TICK", "ACT_WALK", "ACT_NPC_OP", "ACT_LOC_OP", "ACT_IF_OP",
+                                 "ACT_OBJ_OP", "ACT_ON_ITEM", "ACT_ON_LOC", "ACT_ON_NPC", "ACT_ON_OBJ"};
     static const char* glob[] = {"CLIENT_OBJ_PTR", "VARP_ARRAY_PTR", "CONTAINER_BUCKETS", "CONTAINER_MASK",
-                                 "IFACE_EMPTY_SENTINEL", "LOCDEF_CACHE"};
+                                 "IFACE_EMPTY_SENTINEL", "LOCDEF_CACHE", "ITEMDEF_CACHE"};
     for (const char* c : code) if (name == c) return "code";
     for (const char* g : glob) if (name == g) return "global";
     return "field";
