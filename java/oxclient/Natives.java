@@ -148,6 +148,12 @@ public final class Natives {
     public static native int[] input();
 
     /**
+     * The mouse in canvas coordinates, {@code {x, y}}, or empty when the game window is gone. No side
+     * effects: unlike {@link #input} it consumes no key edges or click latches, so any plugin may poll it.
+     */
+    public static native int[] mouse();
+
+    /**
      * Put a finished frame on the overlay. {@code px} must be {@code w*h} <b>premultiplied</b> ARGB
      * pixels, top row first -- which is exactly what a {@code BufferedImage.TYPE_INT_ARGB_PRE} holds.
      */

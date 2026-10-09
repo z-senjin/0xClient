@@ -664,6 +664,19 @@ inline void installMouseLatch(HWND gameWindow) {
              static_cast<unsigned long>(tid));
 }
 
+/// Where the mouse is, in the same canvas coordinates as input(): {x, y}, or empty when the game window
+/// is gone. Unlike input() this has no side effects -- it does not consume the key edges or the click
+/// latches the RuneLite shim reads from input() -- so any plugin may call it every frame.
+inline jintArray JNICALL nMouse(JNIEnv* env, jclass) {
+    HWND w = canvasWindow();
+    POINT p{};
+    if (!w || !IsWindow(w) || !GetCursorPos(&p) || !ScreenToClient(w, &p)) return env->NewIntArray(0);
+    jint v[2] = {p.x, p.y};
+    jintArray arr = env->NewIntArray(2);
+    if (arr) env->SetIntArrayRegion(arr, 0, 2, v);
+    return arr;
+}
+
 inline jintArray JNICALL nInput(JNIEnv* env, jclass) {
     jint v[8 + 16];
     int n = 8;
@@ -1429,6 +1442,7 @@ inline bool startJvm(const std::wstring& javaHome, const std::wstring& jarPath, 
         { const_cast<char*>("objectAction"),const_cast<char*>("(IIII)Z"), reinterpret_cast<void*>(nObjectAction) },
         { const_cast<char*>("viewport"),    const_cast<char*>("()[I"),    reinterpret_cast<void*>(nViewport) },
         { const_cast<char*>("input"),       const_cast<char*>("()[I"),    reinterpret_cast<void*>(nInput) },
+        { const_cast<char*>("mouse"),       const_cast<char*>("()[I"),    reinterpret_cast<void*>(nMouse) },
         { const_cast<char*>("present"),     const_cast<char*>("([III)V"), reinterpret_cast<void*>(nPresent) },
         { const_cast<char*>("presentPanel"),const_cast<char*>("([III)V"), reinterpret_cast<void*>(nPresentPanel) },
         { const_cast<char*>("gameState"),   const_cast<char*>("()I"),     reinterpret_cast<void*>(nGameState) },

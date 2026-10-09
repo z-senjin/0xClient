@@ -79,7 +79,10 @@ public final class OxClient {
             new oxclient.plugins.AntiIdle(),
             // MntnChopper: nearest tree, chop, drop logs when full, repeat. Off by default; appended
             // last (positional indices).
-            new oxclient.plugins.MntnChopper()
+            new oxclient.plugins.MntnChopper(),
+            // Inspector: your location and the ids of NPCs, scenery and items. Off by default; appended
+            // last (positional indices).
+            new oxclient.plugins.Inspector()
     ));
 
     // The overlay image, reused between frames. Reallocating eight megabytes thirty times a second

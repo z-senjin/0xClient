@@ -89,6 +89,18 @@ public final class Hud {
         public int size() { return keys.size(); }
     }
 
+    /** How wide {@link #panel} will draw these lines, so a caller can right-align it. */
+    public static int panelWidth(Graphics2D g, String title, Lines lines) {
+        g.setFont(Theme.UI_BOLD);
+        int width = g.getFontMetrics().stringWidth(title);
+        g.setFont(Theme.UI);
+        for (int i = 0; i < lines.size(); i++) {
+            int w = g.getFontMetrics().stringWidth(lines.keys.get(i) + "   " + lines.values.get(i));
+            width = Math.max(width, w);
+        }
+        return width + 16;
+    }
+
     /**
      * A small statistics panel: a rounded translucent box with a title and two columns.
      *
@@ -99,15 +111,7 @@ public final class Hud {
      */
     public static int panel(Graphics2D g, int x, int y, String title, Lines lines) {
         final int padding = 8, lineHeight = 15;
-
-        g.setFont(Theme.UI_BOLD);
-        int width = g.getFontMetrics().stringWidth(title);
-        g.setFont(Theme.UI);
-        for (int i = 0; i < lines.size(); i++) {
-            int w = g.getFontMetrics().stringWidth(lines.keys.get(i) + "   " + lines.values.get(i));
-            width = Math.max(width, w);
-        }
-        width += padding * 2;
+        int width = panelWidth(g, title, lines);
         int height = padding * 2 + lineHeight * (lines.size() + 1);
 
         g.setColor(Theme.HUD_BACK);
