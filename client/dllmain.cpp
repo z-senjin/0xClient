@@ -38,6 +38,8 @@
 #include "jvm.hpp"
 #include "bridge.hpp"
 #include "offsets_json.hpp"
+#include "selfcheck.hpp"
+#include "actionprobe.hpp"
 
 namespace {
 
@@ -566,10 +568,15 @@ std::string checkBuild(const std::wstring& dllDir) {
         const oxc::offjson::Report rep = oxc::offjson::load(dllDir, have);
         if (rep.loaded) {
             oxc::logf("[build] osclient.exe %s: offsets/client-%s.json loaded from %s "
-                      "(%d applied, %d missing, %d unknown)\n",
-                      shown.c_str(), rep.build.c_str(), rep.source.c_str(), rep.applied, rep.missing, rep.unknown);
+                      "(%d applied, %d of them unmeasured; %d refused, %d missing, %d unknown)\n",
+                      shown.c_str(), rep.build.c_str(), rep.source.c_str(), rep.applied, rep.unmeasured,
+                      rep.refused, rep.missing, rep.unknown);
             for (const std::string& n : rep.missingNames)
                 oxc::logf("[build]   missing in the offsets file, compiled default kept: %s\n", n.c_str());
+            for (const std::string& n : rep.refusedNames)
+                oxc::logf("[build]   refused (not measured on this build; features needing it stay off): %s\n", n.c_str());
+            for (const std::string& n : rep.unmeasuredNames)
+                oxc::logf("[build]   applied but unmeasured on this build: %s\n", n.c_str());
             return "";
         }
         oxc::logf("[build] %s\n", rep.error.c_str());
@@ -886,6 +893,18 @@ DWORD WINAPI run(LPVOID module) {
         }
 
         if (g_javaError.empty()) {
+            // Once per session, after login: test the loaded offsets against the running game and
+            // write offsets\selfcheck-<build>.json (client/selfcheck.hpp). Read-only; OXC_SELFCHECK=0 skips.
+            static oxc::selfcheck::Runner selfCheck;
+            selfCheck.tick(dir, oxc::g_canvasWindow);
+            // OXC_ACTIONPROBE=1 only: hardware-breakpoint hook-and-log of the menu-action path
+            // (client/actionprobe.hpp). Read-only; prints [probe] lines to the OXC_LOG file.
+            static oxc::probe::Probe actionProbe;
+            actionProbe.tick();
+            // Queued menu actions run on the game thread from the tick breakpoint (client/actions.hpp);
+            // this arms it once and logs what was sent. hwbp::tick re-arms new game threads.
+            oxc::actions::tick();
+            oxc::hwbp::tick();
             // Launcher mode: move the bridge along -- publish the model if Java's revision moved,
             // apply whatever edits the launcher queued. One JNI poll per frame, nothing more.
             if (launcherMode) oxc::bridge::tick();

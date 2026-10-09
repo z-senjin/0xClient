@@ -27,6 +27,7 @@
 #include <string>
 #include <vector>
 #include "game.hpp"
+#include "actions.hpp"
 #include "overlay.hpp"
 #include "panel.hpp"
 
@@ -982,7 +983,7 @@ inline jstring JNICALL nDumpWidgetText(JNIEnv* env, jclass, jint max) {
                     // and every component then measures 1x1 -- which is what made this walk report
                     // that the whole rectangle block was wrong (it is not; the walk was).
                     const std::uintptr_t w = rdp(data + i * 16 + 8);
-                    if (!w || w == rdp(moduleBase() + off::IFACE_EMPTY_SENTINEL + 8)) continue;
+                    if (!w || w == (off::IFACE_EMPTY_SENTINEL ? rdp(globalAddr(off::IFACE_EMPTY_SENTINEL) + 8) : 0)) continue;
                     std::string text = nxtString(w + off::IFTYPE_TEXT);
                     bool printable = !text.empty();
                     for (unsigned char ch : text) if (ch < 0x20 || ch > 0x7E) { printable = false; break; }
@@ -1070,7 +1071,7 @@ inline jstring JNICALL nFindWidgetRect(JNIEnv* env, jclass, jint w, jint h) {
                 if (ccount > 4096) ccount = 4096;
                 for (std::uint64_t i = 0; i < ccount && found < 24; ++i) {
                     const std::uintptr_t comp = rdp(data + i * 16 + 8);   // +8: see nDumpWidgetText
-                    if (!comp || comp == rdp(moduleBase() + off::IFACE_EMPTY_SENTINEL + 8)) continue;
+                    if (!comp || comp == (off::IFACE_EMPTY_SENTINEL ? rdp(globalAddr(off::IFACE_EMPTY_SENTINEL) + 8) : 0)) continue;
                     // Look for w at some offset with h nearby (the usual {x,y,w,h} or {w,h} layout).
                     for (std::uintptr_t o = 0; o + 8 <= 0x400; o += 4) {
                         if (rd<std::int32_t>(comp + o, -1) != w) continue;

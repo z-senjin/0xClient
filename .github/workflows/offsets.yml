@@ -7,8 +7,11 @@
 # start, so merging that PR is the release.
 #
 # Nothing here is a secret: the game binary is public, Ghidra is free, and the derivation prints its
-# evidence. A maintainer still reads the diff before merging, because a value the script could not
-# derive is carried from the previous build and labelled, and that label is what to review.
+# evidence. A maintainer still reads the pull request before merging -- its body is update.py's review
+# summary: what was derived, what was carried and why that matters, what the DLL will refuse, and a
+# REGRESSION section (also flagged in the title) when a rule that matched the previous build stopped
+# matching. After merging, the first logged-in run writes a self-check report (client/selfcheck.hpp);
+# `python tools/update/verify.py` on it turns what the running game confirmed into "verified".
 name: offsets
 
 on:
@@ -25,9 +28,14 @@ permissions:
   contents: write
   pull-requests: write
 
+env:
+  GHIDRA_URL: https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_11.4.2_build/ghidra_11.4.2_PUBLIC_20250826.zip
+  GHIDRA_SHA256: 795a02076af16257bd6f3f4736c4fc152ce9ff1f95df35cd47e2adc086e037a6
+
 jobs:
   derive:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
@@ -55,21 +63,37 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - name: Ghidra
+      # Pinned, and checked: the derivation rules read Ghidra's instruction text, so a new Ghidra is a
+      # change to review like any other -- bump GHIDRA_URL and GHIDRA_SHA256 together, in a PR of their own.
+      - name: Ghidra (pinned)
         if: steps.probe.outputs.have == 'false'
+        id: ghidra
+        uses: actions/cache@v4
+        with:
+          path: ~/ghidra
+          key: ghidra-${{ env.GHIDRA_SHA256 }}
+
+      - name: Ghidra download
+        if: steps.probe.outputs.have == 'false' && steps.ghidra.outputs.cache-hit != 'true'
         run: |
           set -e
-          url=$(curl -sL https://api.github.com/repos/NationalSecurityAgency/ghidra/releases/latest | python3 -c "import sys,json; print([a['browser_download_url'] for a in json.load(sys.stdin)['assets'] if a['name'].endswith('.zip')][0])")
-          curl -sL "$url" -o ghidra.zip
+          curl -sSL "$GHIDRA_URL" -o ghidra.zip
+          echo "$GHIDRA_SHA256  ghidra.zip" | sha256sum -c -
           mkdir -p "$HOME/ghidra" && unzip -q ghidra.zip -d "$HOME/ghidra"
-          echo "GHIDRA_HOME=$(ls -d $HOME/ghidra/ghidra_*)" >> "$GITHUB_ENV"
+
+      - name: Ghidra home
+        if: steps.probe.outputs.have == 'false'
+        run: echo "GHIDRA_HOME=$(ls -d $HOME/ghidra/ghidra_*)" >> "$GITHUB_ENV"
 
       - name: Derive offsets
         if: steps.probe.outputs.have == 'false'
+        id: derive
         run: |
           set -e
-          python3 tools/update/update.py --build "${{ steps.probe.outputs.build }}" 2> derive.log
+          python3 tools/update/update.py --build "${{ steps.probe.outputs.build }}" --summary summary.md 2> derive.log
           cat derive.log
+          { echo; echo '<details><summary>derivation log</summary>'; echo; echo '```'; cat derive.log; echo '```'; echo '</details>'; } >> summary.md
+          if grep -q '^### REGRESSION' summary.md; then echo "flag=[REGRESSION] " >> "$GITHUB_OUTPUT"; else echo "flag=" >> "$GITHUB_OUTPUT"; fi
 
       - name: Rebuild the wiki
         if: steps.probe.outputs.have == 'false'
@@ -80,9 +104,9 @@ jobs:
         uses: peter-evans/create-pull-request@v6
         with:
           branch: offsets/client-${{ steps.probe.outputs.build }}
-          title: "Offsets for client-${{ steps.probe.outputs.build }}"
+          title: "${{ steps.derive.outputs.flag }}Offsets for client-${{ steps.probe.outputs.build }}"
           commit-message: "Offsets for client-${{ steps.probe.outputs.build }}"
-          body-path: derive.log
+          body-path: summary.md
           add-paths: |
             offsets/client-${{ steps.probe.outputs.build }}.json
             wiki/index.html

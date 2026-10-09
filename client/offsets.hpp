@@ -90,7 +90,50 @@ inline std::uintptr_t CLIENT_OBJ_PTR = 0xE95668;
 // packed widget id and +0x94 a component index, so this is the widget-menu action path, and the tile
 // actions may go through the minimenu entry exec (FUN_14037E990, vtable 0x140BC91B0 slot 1) instead.
 // Neither is confirmed against a real click. Hook first, call second.
-inline std::uintptr_t DO_ACTION = 0;
+//
+// client-241-3: the same widget-menu path is rva 0x372870 (found by DeriveOffsets.java's pending-action
+// rule, which names it in derived.json's notes every build). Its arguments are (this, packedWidgetId,
+// componentIndex, targetId, flags, ...) -- not doAction's (client, sceneX, sceneY, opcode, ...) -- so it
+// is NOT a drop-in DO_ACTION either. The loader refuses any DO_ACTION that is not derived or verified
+// on the running build (client/offsets_json.hpp), so this stays a no-op until a hook-and-log run pins
+// the real entry point and its signature.
+inline std::uintptr_t DO_ACTION = 0;   // SUPERSEDED by the ACT_* senders below; nothing calls it
+
+// ---------------------------------------------------------------------------------------------------
+// ACTIONS -- what replaced DO_ACTION (client/actions.hpp)
+// ---------------------------------------------------------------------------------------------------
+// This client has no single "do a menu action" function. Each menu entry carries a small callback that
+// calls one SENDER per target kind, with the option number as an argument; the sender has the client
+// build and queue the packet. Those senders are what 0xClient calls -- with the same arguments the
+// client's own callbacks pass, ON THE GAME THREAD, from ACT_TICK:
+//
+//   ACT_WALK    void walk(void*, int args[3])             args = {level, worldX, worldY}  ("Walk here")
+//   ACT_NPC_OP  void npcOp(void*, void* npc, int op, int flag)          op 1..5 = the NPC's options
+//   ACT_LOC_OP  void locOp(void*, int id, int args[6], int op, int flag)  args = {level, worldX, worldY,
+//                                                                          id, op, flag}; op 1..5
+//   ACT_TICK    the client's per-frame tick (the function that increments CYCLE). A hardware execute
+//               breakpoint on its entry (client/hwbp.hpp, no code patched) is where queued actions run:
+//               the game's own thread, between frames, the same thread every click arrives on.
+//
+// HOW FOUND (client-241-3, 2026-10-09): a hook-and-log run (client/actionprobe.hpp) caught every click
+// in game -- Walk here -> packet 0x37 via the callback at 0x387610 -> 0x387620; Talk-to -> 0x388870 ->
+// 0x388910 (op 1); Attack -> 0x389030; Open (a door) -> 0x387cd0 -> 0x387cf0 -- each running on the
+// one thread whose stack goes through 0x6b400 (the CYCLE tick). AUTOMATED (DeriveOffsets.java, derive3):
+// the packet-start function is the one called as `mov r8,[client+CONN]; add r8,IMM; mov edx,OPCODE;
+// call P`; among P's callers, ACT_NPC_OP is the only one that tests its entity argument first, calls P
+// with five opcodes and switches on R8D; ACT_LOC_OP the only five-opcode one that switches on R9D;
+// ACT_WALK the menu walk -- one opcode, args compared against the three-int last-destination global,
+// no third argument. The arguments' layouts were read off the handlers' callers (each copies them from
+// its argument block). VERIFIED LIVE 2026-10-09 (client-241-3, a second hook-and-log run): the client's
+// own clicks passed walk {plane, x, y}, NPC {uid, option, 0} and object {plane, x, y, id, option, 0}, and
+// doAction's walk and NPC options -- same layouts, flag 0 -- were sent from ACT_TICK and acted on in game.
+// The object sender's layout matched a real click; doAction has not yet sent one itself.
+// 0 = not derived for this build: the loader refuses an unmeasured code RVA, and every action is
+// dropped (and says so) rather than calling a stale address.
+inline std::uintptr_t ACT_TICK   = 0;
+inline std::uintptr_t ACT_WALK   = 0;
+inline std::uintptr_t ACT_NPC_OP = 0;
+inline std::uintptr_t ACT_LOC_OP = 0;
 
 // The client's world->screen projection leaf. Takes {fineX, fineY, fineZ} and writes {screenX, screenY}.
 // "Fine" coordinates are tiles << 7 (i.e. 128 units per tile). It reads the camera out of the client
@@ -132,6 +175,9 @@ inline std::uintptr_t WORLD_TO_SCREEN = 0x2202A0;
 inline std::uintptr_t CAMERA_FINE_X = 0x895D8;
 inline std::uintptr_t CAMERA_FINE_H = 0x895DC;
 inline std::uintptr_t CAMERA_FINE_Y = 0x895E0;
+// AUTOMATED from client-241-3 (DeriveOffsets.java, derive2): worldToScreenCoord now fetches the view
+// through a getter (`mov rax,[rcx+VIEW_OBJ]; ret`) and passes view+VIEW_OBJ_SCALE_BASE to the rescale,
+// whose two DIVSS name each pair's numerator and divisor directly.
 inline std::uintptr_t VIEW_OBJ            = 0x90;  // -> view object
 inline std::uintptr_t VIEW_OBJ_SCALE_BASE = 0x10;  // the scales hang off view+0x10, so a
                                                              // scale address is this base + the VIEW_*
@@ -224,7 +270,9 @@ inline std::uintptr_t CYCLE      = 0x2164;
 inline std::uintptr_t GAME_STATE = 0x2160;  // int32; 30 = logged in
 
 // The pending menu-action record -- what the game fills when you click a menu entry, and what its
-// packet sender reads back. Three ints on the client object plus a small state tail:
+// packet sender reads back. Three ints plus a small state tail -- on the ACTION OBJECT the method below
+// is a virtual of, NOT on the client object (client+0x90 is VIEW_OBJ, a pointer; client-241-3 shows the
+// method reached only through its vtable at 0x140c7e638/0x140c7e648, with that object as `this`):
 //   +0x90 packed widget id (groupId<<16 | componentId -- the same split FUN_1405B64D0 does)
 //   +0x94 component index / selector (-1 = "the tile itself, no sub-object")
 //   +0x98 target id (npc/player/loc index, as read back by the packet writer)
@@ -236,6 +284,9 @@ inline std::uintptr_t GAME_STATE = 0x2160;  // int32; 30 = logged in
 // +0x98 as 2-byte BE) and enqueues opcode 0x26 via FUN_140203D30 when connection state == 3. NOTE the
 // tempting "scene x / scene y" reading of +0x90/+0x94 is WRONG -- +0x90 is a packed widget id (its high
 // half bounds-checks against the interface manager's group count) and +0x94 is an index, not an axis.
+// AUTOMATED from client-241-3 (DeriveOffsets.java, derive2): the method is the caller of the IfType
+// child lookup whose prologue does `inc word [rcx+SEQ]`, stores EDX/R8D/R9D at the three ints and sets
+// the pending byte to 1 -- rva 0x372870 on 241-3, same offsets as 240-6.
 // NOT VERIFIED LIVE (needs a hook-and-log against a real click before anything calls into it).
 inline std::uintptr_t PENDING_ACTION_PACKED_ID = 0x90;
 inline std::uintptr_t PENDING_ACTION_INDEX     = 0x94;
@@ -357,7 +408,11 @@ inline std::uintptr_t CONTAINER_NODE_NEXT     = 0x38;  // ptr field -> next node
 // FUN_14009ffe0 -> FUN_1400ef5e0 resolves map/group, and FUN_1400edb90 walks a table at group+0x68
 // counting uids and returning node+0x10 -- the PLAYER table. getNpcIdAll (FUN_1403ae380) reads the
 // NPC uid array at scene+0xD0/0xD8, and npcCoord (FUN_1403af380) returns {*(scene+0x18),
-// *(entity+0x3F0), *(entity+0x418)}. VERIFIED LIVE under Wine via /proc/pid/mem at the Grand
+// *(entity+0x3F0), *(entity+0x418)}. AUTOMATED from client-241-3 (DeriveOffsets.java, derive2):
+// playerFindSelf's resolver gives REGISTRY_GROUP_SEL and, through the two hash-walks it calls (group
+// lookup, player-table lookup), GROUP_*, PLAYER_BUCKETS/COUNT and NODE_*; npcName's group walk gives
+// NPC_BUCKETS/COUNT; the player-list loop (`movsxd r,[client+COUNT]; lea r,[client+COUNT+4]`, each id
+// looked up in the player table) gives PLAYER_COUNT/IDS. VERIFIED LIVE under Wine via /proc/pid/mem at the Grand
 // Exchange: the player table enumerated exactly the uids in PLAYER_IDS (local player included), the
 // NPC table exactly the 12 uids of scene+0xD0's array -- with sane scene coords, idle animations
 // (-1) and orientations in 256-step cardinal values.
@@ -406,6 +461,9 @@ inline std::uintptr_t SCENE_NPC_UID_COUNT = 0xD8;  // field on the scene object
 // the game". Pinned LIVE under Wine while standing at the Grand Exchange: +0x1C/+0x20 hold the scene
 // size (104, 104) and +0x24/+0x28 hold (3112, 3440), the GE's world coordinates -- exactly what a
 // south-west corner in world tiles should read. VERIFIED LIVE.
+// AUTOMATED from client-241-3 (DeriveOffsets.java, derive2): every scene->world conversion in the
+// client is `mov r,[client+SCENE]; ... add r2,dword [r+BASE]`; the dword pair the client adds most often
+// right after loading the scene pointer is the base (seven sites each on 241-3).
 inline std::uintptr_t SCENE_BASE_X = 0x24;
 inline std::uintptr_t SCENE_BASE_Y = 0x28;
 
@@ -426,6 +484,11 @@ inline std::uintptr_t ENTITY_SCENE_Y = 0x418;
 // too low. VERIFIED LIVE at one spot on plane 0 only; NOT VERIFIED on slopes, stairs or while moving
 // (while walking the x/y here should interpolate between tiles -- if they stay at the centre they are
 // a tile-derived copy, which is still right for drawing).
+// client-241-3: the self-check read 0 at +0x1F8/+0x1FC/+0x200 while logged in, so on that build the
+// render position is taken from the client's own npcCoordFine binding instead (DeriveOffsets.java,
+// derive2): it reads x/y through a coordinate object at entity+0x260 (+0x8 / +0xC), i.e. +0x268/+0x26C --
+// the "copies" above. That binding computes the height from the terrain (rva 0x97960 on 241-3) rather
+// than storing it, so ENTITY_FINE_H has no derivation and stays unmeasured.
 inline std::uintptr_t ENTITY_FINE_H = 0x1F8;
 inline std::uintptr_t ENTITY_FINE_X = 0x1FC;
 inline std::uintptr_t ENTITY_FINE_Y = 0x200;
@@ -503,6 +566,18 @@ inline std::uintptr_t DEF_NAME             = 0x8;    // NxtString on the NPC def
 // Sub-children of a widget: count at IfType+0xB50, data at IfType+0xB58, same 16-byte entries.
 // Text: IfType+0x158 (and +0x170 for the second line) as NxtString-shaped inline-or-pointer with the
 // heap flag's bit7 at IfType+0x16F (and +0x187) -- the same read rule as the NxtString above.
+//
+// AUTOMATED from client-241-3 (DeriveOffsets.java, derive2), and worth knowing because the numbers
+// MOVED there: IFACE_MANAGER 0x413BE8 -> 0x413BD8, the group count/array 0x6600/0x6608 -> 0x6888/0x6890,
+// the empty sentinel 0x155C5F0 -> 0x155E5E8 -- a file that carried the 240-6 values read nothing. The
+// rule: the client getter `mov rax,[rcx+MGR]; ret` whose result is passed straight to the widget lookup
+// (the function that splits the packed id with `sar r,0x10`, bounds it against [mgr+COUNT], indexes
+// [mgr+COUNT+8] in 24-byte entries and returns the static empty object on a miss); the IfType fields
+// come from the IfType usertype registration, which binds each property NAME to its field OFFSET
+// (`mov dword [rbp+0x20],OFF; lea rax,["width"]; call register<int>`), and the text fields from the
+// NxtString getter lambdas emitted right after that registration. IFTYPE_X/Y are not bound by name:
+// they are taken as the two ints between the bound dataHeight and width, accepted only when the table
+// has exactly that shape, and the DLL's self-check confirms them (a group root at (0,0), canvas-sized).
 //
 // VERIFIED LIVE: 970 groups loaded in the GE, sane bounds (canvas-sized 1054x784 on the top-level
 // groups), and real strings came back through the text rule ("<col=808080>Chat-channel</col>",
@@ -649,6 +724,11 @@ inline std::int32_t LOGIN_PASSWORD_DELTA = 508;
 // ---------------------------------------------------------------------------------------------------
 // These are the client's INTERNAL menu action numbers, not network opcodes. They are what the game puts
 // in its own right-click menu, and handing one to DO_ACTION is exactly equivalent to clicking it.
+//
+// SINCE client-241-3 these are 0xClient's OWN labels, not game numbers: doAction() (client/actions.hpp)
+// maps OP_WALK to ACT_WALK, OPNPC1..5 to ACT_NPC_OP with option 1..5 and OPLOC1 to ACT_LOC_OP with
+// option 1. They no longer reach the game, so nothing about them changes per build. The history below
+// is kept for whoever reads an older build.
 //
 // HOW THESE WERE FOUND, and how to confirm another: hook DO_ACTION so it logs its arguments, perform
 // the action by hand in game, and read the opcode out of the log. The numbers below were captured that

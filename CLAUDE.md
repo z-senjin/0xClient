@@ -35,6 +35,7 @@ This file is read by coding agents working in this repository. People should rea
 - `launcher/` — the ImGui launcher (C++).
 - `offsets/` — one JSON per client build, produced by `tools/update/update.py`.
 - `tools/update/` — the updater: fetch a client, run Ghidra headless, derive, diff, write.
+  `verify.py` folds the DLL's self-check report (`client/selfcheck.hpp`) into a build's file.
 - `tools/ghidra_scripts/` — the Ghidra scripts the updater and the deob skill run.
 - `wiki/` — the generated wiki. Rebuild it; do not edit it.
 

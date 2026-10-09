@@ -71,7 +71,7 @@ target_include_directories(oxc_imgui PUBLIC third_party/imgui client)
 add_library(oxc_dll SHARED client/dllmain.cpp)
 target_include_directories(oxc_dll PRIVATE client ${JNI_INCLUDE_DIRS})
 # version: GetFileVersionInfoW, for the build fingerprint check against the host exe (offsets.hpp).
-target_link_libraries(oxc_dll PRIVATE user32 gdi32 version winhttp oxc_imgui)
+target_link_libraries(oxc_dll PRIVATE user32 gdi32 version winhttp bcrypt oxc_imgui)
 set_target_properties(oxc_dll PROPERTIES PREFIX "" OUTPUT_NAME "0xclient")
 
 if(MINGW)

@@ -215,7 +215,8 @@ public class DeriveOffsets extends GhidraScript {
         Set<Long> coordFields = dwordFields(coord, 0x100, 0x1000);
         long ex = val("ENTITY_SCENE_X"), ey = val("ENTITY_SCENE_Y");
         for (Long d : coordFields) if (!npcFields.contains(d) && d != ex && d != ey) { put("ENTITY_PLANE_COORD", d, "the one dword the coord leaf reads off the entity that npcCoord does not (its level)"); break; }
-        for (Long d : npcFields) if (coordFields.contains(d) && d != ex && d != ey && d < ex) { put("ENTITY_FINE_H", d, "dword both coordinate leaves read below the scene coords: the render height (fine x/y follow at +4/+8)"); put("ENTITY_FINE_X", d + 4, "render position triple {height, x, y}: +4"); put("ENTITY_FINE_Y", d + 8, "render position triple {height, x, y}: +8"); break; }
+        // (The render position is NOT taken from these two leaves any more: on client-241-3 the triple this
+        //  heuristic picked (+0x1F8..0x200) read 0 in game. derive2() reads it off npcCoordFine instead.)
         if (!out.containsKey("ENTITY_SCENE_X")) notes.add("entity coords: npcCoord fields " + hex(npcFields) + ", coord fields " + hex(coordFields) + " -- no load/store pair found");
 
         // ---- getNpcIdAll walks the registry (client+GROUPS / client+GROUP_COUNT) and, per group,
@@ -300,6 +301,11 @@ public class DeriveOffsets extends GhidraScript {
             }
         }
 
+        // ---- the rest is derive2(): rules added for client-241-3, each anchored on a name the client
+        //      binds or on the call graph out of one, the same discipline as above.
+        try { derive2(); } catch (Exception e) { notes.add("derive2 aborted: " + e); printerr("derive2: " + e); }
+        try { derive3(); } catch (Exception e) { notes.add("derive3 aborted: " + e); printerr("derive3: " + e); }
+
         // ---- item containers: the invGetObjId leaf is a Lua trampoline; the one function it calls
         //      directly is the implementation, which walks a global bucket table (count, then array)
         //      The lookup: `mov r10,[COUNT]; ... div r8; mov rdx,[BUCKETS]; mov rax,[rdx+rax*8]`, then
@@ -338,6 +344,678 @@ public class DeriveOffsets extends GhidraScript {
                 break;
             }
         }
+    }
+
+    // ===========================================================================================
+    // Rules added for client-241-3. Each one was worked out by hand on that build (the evidence each
+    // writes quotes the instruction it read), then written down here so the next build is automatic.
+    // ===========================================================================================
+    private void derive2() {
+        long client = val("CLIENT_OBJ_PTR");
+
+        // ---- IfType: the usertype registration is a TABLE of (field offset, name) pairs. Each property
+        //      is registered as `MOV dword [RBP+0x20],OFFSET; ...; LEA RAX,[name]; ...; CALL register<T>`
+        //      -- the client stating its own struct layout, one field per name.
+        Function ifReg = functionReferencing("osrs.IfType");
+        Map<String, long[]> iftab = ifReg == null ? new LinkedHashMap<>() : propertyTable(ifReg);
+        if (iftab.containsKey("width") && iftab.containsKey("height") && iftab.containsKey("hidden")) {
+            long w = iftab.get("width")[0], h = iftab.get("height")[0];
+            String where = "IfType registration rva 0x" + Long.toHexString(rva(ifReg.getEntryPoint()));
+            put("IFTYPE_WIDTH", w, where + " binds \"width\" to this offset (" + hexAt(iftab.get("width")[1]) + ")");
+            put("IFTYPE_HEIGHT", h, where + " binds \"height\" to this offset (" + hexAt(iftab.get("height")[1]) + ")");
+            put("IFTYPE_HIDDEN", iftab.get("hidden")[0], where + " binds \"hidden\" to this offset (" + hexAt(iftab.get("hidden")[1]) + ")");
+            // x/y are not bound by name. The laid-out rect is {x, y, width, height}, contiguous, right
+            // after the bound cache rect {dataX, dataY, dataWidth, dataHeight}: accepted only when the
+            // table shows exactly that shape (dataHeight + 0xC == width, height == width + 4).
+            if (iftab.containsKey("dataHeight") && iftab.get("dataHeight")[0] + 0xC == w && h == w + 4) {
+                put("IFTYPE_X", w - 8, "the two unbound ints between the bound dataHeight (0x" + Long.toHexString(w - 0xC)
+                        + ") and width (0x" + Long.toHexString(w) + "): the laid-out rect {x, y, width, height}");
+                put("IFTYPE_Y", w - 4, "x + 4 in the same rect (see IFTYPE_X)");
+            }
+            // String properties (text, text2...) are registered without an offset; their getters are
+            // lambdas emitted right after the registration, each of the NxtString shape
+            // `movzx eax,byte [rcx+S+0x17]; shr al,7; ...; mov rax,[rcx+S]; ret; lea rax,[rcx+S]; ret`.
+            // The registration's last two string properties are "text" then "text2", and their lambdas
+            // are the last two such getters, 0x18 apart (two consecutive NxtStrings).
+            List<long[]> sso = ssoGettersAfter(ifReg, 0x1000);
+            List<String> names = new ArrayList<>(iftab.keySet());
+            if (sso.size() >= 2 && names.indexOf("text2") > names.indexOf("text") && names.indexOf("text") >= 0) {
+                long[] a = sso.get(sso.size() - 2), b = sso.get(sso.size() - 1);
+                if (b[0] == a[0] + 0x18) {
+                    put("IFTYPE_TEXT", a[0], "the \"text\" property's getter lambda after the IfType registration: " + at(getInstructionAt(toAddr(a[1]))));
+                    put("IFTYPE_TEXT_FLAG", a[0] + 0x17, "the same getter tests bit 7 of this byte (the NxtString heap flag)");
+                    put("IFTYPE_TEXT2", b[0], "the \"text2\" property's getter lambda: " + at(getInstructionAt(toAddr(b[1]))));
+                    put("IFTYPE_TEXT2_FLAG", b[0] + 0x17, "the same getter tests bit 7 of this byte");
+                }
+            }
+        } else {
+            notes.add("IfType: no property table (registration " + (ifReg == null ? "not found" : "has no width/height/hidden") + ")");
+        }
+
+        // ---- the interface manager and its group table. The client object has a one-instruction getter
+        //      `mov rax,[rcx+MGR]; ret`; its result goes straight into the widget lookup, which splits the
+        //      packed id (`sar r,0x10` / `movzx r,dx`), bounds the group against [mgr+COUNT], indexes
+        //      [mgr+COUNT+8] with 24-byte entries (`lea rdx,[rax+rax*2]` then `*8`), reads the entry's
+        //      component count at +8 and data at +0x10, and returns the static empty object on failure.
+        //      Anchor: call-graph position -- the getter's result is the lookup's first argument.
+        WidgetLookup wl = findWidgetLookup(client);
+        if (wl != null) {
+            put("IFACE_MANAGER", wl.mgr, "one-instruction getter " + at(wl.getterInsn) + " whose result is passed to the widget lookup at rva 0x" + Long.toHexString(rva(wl.lookup)));
+            put("IFACE_GROUP_COUNT", wl.count, "widget lookup bounds the group id: " + at(wl.cmpInsn));
+            put("IFACE_GROUP_ARRAY", wl.count + 8, "widget lookup indexes the group array: " + at(wl.arrInsn));
+            put("IFACE_GROUP_ENTRY_STRIDE", 24, "widget lookup scales the group index by 3 then 8: " + at(wl.leaInsn));
+            if (wl.entryCount >= 0) put("IFACE_GROUP_ENTRY_COUNT", wl.entryCount, "widget lookup bounds the component index: " + at(wl.entryCountInsn));
+            if (wl.entryData >= 0) put("IFACE_GROUP_ENTRY_DATA", wl.entryData, "widget lookup reads the component array: " + at(wl.entryDataInsn));
+            if (wl.sentinel != null) put("IFACE_EMPTY_SENTINEL", rva(wl.sentinel), "widget lookup returns this static empty object on a miss: " + at(wl.sentinelInsn));
+            // Sub-children: the function that calls the lookup, takes the component (+8 of the 16-byte
+            // entry) and bounds an index against [comp+COUNT] before adding [comp+COUNT+8].
+            for (Reference r : getReferencesTo(wl.lookup)) {
+                Function f = getFunctionContaining(r.getFromAddress());
+                if (f == null) continue;
+                List<Instruction> body = listing(f.getEntryPoint(), 60);
+                Instruction cmp = null;
+                for (Instruction i : body) {
+                    Mem m = memOf(i);
+                    if (m == null || !m.hasDisp || m.disp < 0x200) continue;
+                    if (i.getMnemonicString().equals("CMP") && i.toString().contains("qword ptr")) cmp = i;
+                    if (cmp != null && i.getMnemonicString().equals("ADD") && m.disp == mem(cmp).disp + 8) {
+                        put("IFTYPE_CHILDREN_COUNT", mem(cmp).disp, "child lookup (rva 0x" + Long.toHexString(rva(f.getEntryPoint())) + ", calls the widget lookup) bounds the child index: " + at(cmp));
+                        put("IFTYPE_CHILDREN_DATA", m.disp, "and adds the child array: " + at(i));
+                        break;
+                    }
+                }
+                if (out.containsKey("IFTYPE_CHILDREN_COUNT")) break;
+            }
+        } else {
+            notes.add("interface manager: no getter whose result feeds a widget lookup");
+        }
+
+        // ---- the entity registry, through playerFindSelf. Its leaf gates on LOCAL_PLAYER_IDX and calls
+        //      a resolver R1. R1 calls G -- `mov edx,[rcx+SEL]; add rcx,MAP; jmp GROUP_LOOKUP` -- and then
+        //      the player-table lookup with [client+LOCAL_PLAYER_IDX]. Both lookups are the same hash-walk
+        //      shape: bucket count and array off the table, `div`, `cmp key,[node]`, `mov rax,[node+NEXT]`,
+        //      and the value `mov rax,[node+VALUE]` on a hit.
+        List<Instruction> self = leaf("playerFindSelf", 120);
+        Address r1 = null;
+        for (Instruction i : self) if (i.getMnemonicString().equals("CALL") && callTarget(i) != null) { r1 = callTarget(i); break; }
+        if (r1 != null) {
+            List<Instruction> rb = linear(r1, 20);
+            dump("playerFindSelf resolver rva 0x" + Long.toHexString(rva(r1)), rb);
+            Address g = null, t = null;
+            for (Instruction i : rb) {
+                String mn = i.getMnemonicString();
+                if ((mn.equals("CALL") || mn.equals("JMP")) && i.getFlows().length > 0 && text.contains(i.getFlows()[0])) {
+                    if (g == null) g = i.getFlows()[0]; else if (t == null) t = i.getFlows()[0];
+                }
+            }
+            if (g != null) {
+                List<Instruction> gb = linear(g, 6);
+                dump("registry group resolver entry rva 0x" + Long.toHexString(rva(g)), gb);
+                Instruction sel = firstMatch(gb, "MOV", m -> m.hasDisp && m.disp > 0x1000, null);
+                Instruction add = null;
+                for (Instruction i : gb) if (i.getMnemonicString().equals("ADD") && i.toString().startsWith("ADD RCX,0x")) add = i;
+                if (sel != null) put("REGISTRY_GROUP_SEL", mem(sel).disp, "the registry resolver keys the group lookup on it: " + at(sel));
+                Address gl = null;
+                for (Instruction i : gb) if (i.getMnemonicString().equals("JMP") || i.getMnemonicString().equals("CALL")) { gl = i.getFlows().length > 0 ? i.getFlows()[0] : null; }
+                if (add != null && gl != null) {
+                    long map = Long.parseLong(i2s(add).replaceAll(".*,0x", ""), 16);
+                    HashWalk hw = hashWalk(listing(gl, 60));
+                    if (hw != null && hw.valueInsn != null && hw.buckets == 0x20 && hw.count == 0x28 && map == val("REGISTRY_MAP")) {
+                        put("GROUP_NEXT", hw.next, "registry group lookup (rva 0x" + Long.toHexString(rva(gl)) + ") walks the chain: " + at(hw.nextInsn));
+                        put("GROUP_TABLE", hw.value, "and returns the group's table pair: " + at(hw.valueInsn));
+                    } else if (hw != null) {
+                        notes.add("registry group lookup: buckets 0x" + Long.toHexString(hw.buckets) + " count 0x" + Long.toHexString(hw.count) + " map 0x" + Long.toHexString(map));
+                    }
+                }
+            }
+            if (t != null) {
+                HashWalk hw = hashWalk(listing(t, 60));
+                if (hw != null && hw.valueInsn != null) {
+                    String w = "player-table lookup rva 0x" + Long.toHexString(rva(t)) + " (called with LOCAL_PLAYER_IDX by playerFindSelf's resolver)";
+                    put("PLAYER_BUCKETS", hw.buckets, w + ": " + at(hw.bucketsInsn));
+                    put("PLAYER_BUCKET_COUNT", hw.count, w + ": " + at(hw.countInsn));
+                    if (hw.keyAtZero) put("NODE_UID", 0, w + " compares the uid with [node]: " + at(hw.keyInsn));
+                    put("NODE_NEXT", hw.next, w + " walks the bucket chain: " + at(hw.nextInsn));
+                    put("NODE_ENTITY", hw.value, w + " returns the entity: " + at(hw.valueInsn));
+                }
+            }
+        }
+
+        // ---- the NPC table: npcName's lookup (client + REGISTRY_MAP) walks every group and, per group's
+        //      table pair, divides the uid by the NPC bucket count and indexes the NPC bucket array.
+        List<Instruction> nn = leaf("npcName", 300);
+        for (Address c1 : callees(nn)) {
+            for (Address c2 : callees(listing(c1, 30))) {
+                List<Instruction> body = listing(c2, 500);
+                HashWalk hw = hashWalk(body);
+                if (hw != null && hw.buckets != val("PLAYER_BUCKETS") && hw.buckets > 0x10) {
+                    String w = "npcName's group walk rva 0x" + Long.toHexString(rva(c2));
+                    put("NPC_BUCKETS", hw.buckets, w + ": " + at(hw.bucketsInsn));
+                    put("NPC_BUCKET_COUNT", hw.count, w + ": " + at(hw.countInsn));
+                    break;
+                }
+            }
+            if (out.containsKey("NPC_BUCKETS")) break;
+        }
+
+        // ---- the player handle list: `movsxd r,[client+COUNT]` then `lea r,[client+COUNT+4]` (ids
+        //      inline after the count), in a loop that looks each id up in the player table (a `div` by
+        //      [pair+PLAYER_BUCKET_COUNT]). Several fields fit the first half; only one feeds the table.
+        long pbc = val("PLAYER_BUCKET_COUNT");
+        if (pbc >= 0) {
+            Instruction cur = getFirstInstruction();
+            while (cur != null && text.contains(cur.getAddress())) {
+                String s = cur.toString();
+                if (s.startsWith("MOVSXD") && s.contains("dword ptr [")) {
+                    Mem m = memOf(cur);
+                    if (m != null && m.hasDisp && m.disp > 0x1000 && m.disp < 0x100000 && m.index.isEmpty()) {
+                        Instruction j = cur, lea = null, div = null;
+                        for (int k = 0; k < 30 && j != null; k++) {
+                            j = j.getNext();
+                            if (j == null) break;
+                            Mem mj = memOf(j);
+                            if (lea == null && j.getMnemonicString().equals("LEA") && mj != null && mj.base.equals(m.base) && mj.disp == m.disp + 4) lea = j;
+                            if (lea != null && mj != null && mj.hasDisp && mj.disp == pbc && j.toString().contains("dword ptr")) { div = j; break; }
+                        }
+                        if (lea != null && div != null) {
+                            put("PLAYER_COUNT", m.disp, "the player-list walk reads the count: " + at(cur));
+                            put("PLAYER_IDS", m.disp + 4, "takes the inline id array right after it: " + at(lea) + ", and looks each id up in the player table: " + at(div));
+                            break;
+                        }
+                    }
+                }
+                cur = cur.getNext();
+            }
+        }
+
+        // ---- the scene's world-tile base. Every scene->world conversion in the client is
+        //      `mov r,[client+SCENE]; ...; add r2,[r+BASE_X]` (and +4 for y). The pair the client ADDS to
+        //      most often right after loading the scene pointer is the base.
+        long sceneOff = val("SCENE");
+        if (sceneOff > 0) {
+            Map<Long, Integer> adds = new TreeMap<>();
+            Map<Long, Instruction> ex = new TreeMap<>();
+            String needle = "+ 0x" + Long.toHexString(sceneOff) + "]";
+            Instruction cur = getFirstInstruction();
+            while (cur != null && text.contains(cur.getAddress())) {
+                String s = cur.toString();
+                if (s.startsWith("MOV ") && s.contains("qword ptr [") && s.endsWith(needle)) {
+                    String reg = destReg(cur);
+                    Instruction j = cur;
+                    for (int k = 0; k < 10; k++) {
+                        j = j.getNext();
+                        if (j == null) break;
+                        Mem mj = memOf(j);
+                        if (j.getMnemonicString().equals("ADD") && mj != null && mj.base.equals(reg) && mj.hasDisp && j.toString().contains("dword ptr")) {
+                            adds.merge(mj.disp, 1, Integer::sum);
+                            ex.putIfAbsent(mj.disp, j);
+                        }
+                        if (destReg(j).equals(reg) && !j.getMnemonicString().equals("CMP") && !j.getMnemonicString().equals("TEST")) break;
+                    }
+                }
+                cur = cur.getNext();
+            }
+            long best = -1;
+            int bestN = 0;
+            for (Map.Entry<Long, Integer> e : adds.entrySet()) {
+                Integer y = adds.get(e.getKey() + 4);
+                if (y == null) continue;
+                int n = Math.min(e.getValue(), y);
+                if (n > bestN) { bestN = n; best = e.getKey(); }
+            }
+            if (best >= 0 && bestN >= 3) {
+                put("SCENE_BASE_X", best, bestN + " scene->world conversions add it right after loading the scene pointer, e.g. " + at(ex.get(best)));
+                put("SCENE_BASE_Y", best + 4, "and this one alongside it, e.g. " + at(ex.get(best + 4)));
+            } else {
+                notes.add("scene base: no scene field pair is added often enough (best 0x" + Long.toHexString(best) + " x" + bestN + ")");
+            }
+        }
+
+        // ---- the render (fine) position: the client's own npcCoordFine binding reads it through a small
+        //      coordinate object on the entity -- `lea rcx,[entity+OBJ]; call getX` then `lea rcx,[entity+OBJ];
+        //      call getY`, each getter one instruction (`mov eax,[rcx+D]; ret`) -- and computes the height
+        //      from the terrain rather than storing it, so there is no height field to derive here.
+        List<Instruction> ncf = leaf("npcCoordFine", 400);
+        List<long[]> pairs2 = new ArrayList<>();
+        List<Instruction> where = new ArrayList<>();
+        for (int k = 0; k + 1 < ncf.size(); k++) {
+            Instruction a = ncf.get(k), c = null;
+            for (int q = k + 1; q < Math.min(ncf.size(), k + 4); q++) if (ncf.get(q).getMnemonicString().equals("CALL")) { c = ncf.get(q); break; }
+            Mem m = memOf(a);
+            if (!a.toString().startsWith("LEA RCX,[") || m == null || !m.hasDisp || m.disp < 0x100 || c == null || callTarget(c) == null) continue;
+            List<Instruction> g = linear(callTarget(c), 2);
+            if (g.size() == 2 && g.get(1).getMnemonicString().equals("RET") && g.get(0).toString().startsWith("MOV EAX,dword ptr [RCX + ")) {
+                pairs2.add(new long[]{m.disp, mem(g.get(0)).disp});
+                where.add(a);
+            }
+        }
+        if (pairs2.size() >= 2 && pairs2.get(0)[0] == pairs2.get(1)[0]) {
+            put("ENTITY_FINE_X", pairs2.get(0)[0] + pairs2.get(0)[1], "npcCoordFine reads x through the entity's coordinate object: " + at(where.get(0)) + " then a getter of +0x" + Long.toHexString(pairs2.get(0)[1]));
+            put("ENTITY_FINE_Y", pairs2.get(1)[0] + pairs2.get(1)[1], "and y: " + at(where.get(1)) + " then a getter of +0x" + Long.toHexString(pairs2.get(1)[1]));
+        } else {
+            notes.add("npcCoordFine: no coordinate-object getter pair found");
+        }
+
+        // ---- the NPC definition's name: npcName's resolver falls back to `mov rdx,[entity+DEF_PTR];
+        //      add rdx,NAME` -- the NxtString on the definition.
+        long defPtr = val("ENTITY_DEF_PTR");
+        if (defPtr > 0) {
+            outer:
+            for (Address callee : callees(nn)) {
+                List<Instruction> body = listing(callee, 400);
+                for (int k = 0; k + 1 < body.size(); k++) {
+                    Instruction a = body.get(k), b = body.get(k + 1);
+                    Mem m = memOf(a);
+                    if (a.getMnemonicString().equals("MOV") && m != null && m.hasDisp && m.disp == defPtr && b.getMnemonicString().equals("ADD")
+                            && destReg(b).equals(destReg(a)) && b.toString().contains(",0x")) {
+                        long name = Long.parseLong(b.toString().replaceAll(".*,0x", ""), 16);
+                        put("DEF_NAME", name, "npcName's resolver takes the definition's name string: " + at(a) + "; " + at(b));
+                        break outer;
+                    }
+                }
+            }
+        }
+
+        // ---- the projection's view object and rescale. worldToScreenCoord calls the view getter
+        //      `mov rax,[rcx+VIEW]; ret` on the client, then hands `view+BASE` to the final rescale, which
+        //      computes x * [s+OUT_W] / [s+IN_W] and y * [s+OUT_H] / [s+IN_H].
+        Address w2s = leafAddress("worldToScreenCoord");
+        if (w2s != null) {
+            List<Instruction> body = listing(w2s, 600);
+            for (int k = 0; k + 2 < body.size(); k++) {
+                Instruction call = body.get(k);
+                if (!call.getMnemonicString().equals("CALL") || callTarget(call) == null) continue;
+                List<Instruction> g = listing(callTarget(call), 3);
+                if (g.size() < 2 || !g.get(0).getMnemonicString().equals("MOV") || !g.get(1).getMnemonicString().equals("RET")) continue;
+                Mem gm = memOf(g.get(0));
+                if (gm == null || !gm.hasDisp || !gm.base.equals("RCX")) continue;
+                Instruction lea = null, rc = null;
+                for (int q = k + 1; q < Math.min(body.size(), k + 8); q++) {
+                    Instruction x = body.get(q);
+                    Mem xm = memOf(x);
+                    if (lea == null && x.toString().startsWith("LEA RCX,[RAX + ") && xm != null) lea = x;
+                    else if (lea != null && x.getMnemonicString().equals("CALL")) { rc = x; break; }
+                }
+                if (lea == null || rc == null || callTarget(rc) == null) continue;
+                Mem lm = memOf(lea);
+                List<Instruction> rs = listing(callTarget(rc), 60);
+                dump("projection rescale rva 0x" + Long.toHexString(rva(callTarget(rc))), rs);
+                // track the last [RCX+d] load into each XMM register; each DIVSS a,b is (load a)/(load b)
+                Map<String, Instruction> lastLoad = new LinkedHashMap<>();
+                List<Instruction[]> divs = new ArrayList<>();
+                for (Instruction i : rs) {
+                    Mem m = memOf(i);
+                    if (i.getMnemonicString().equals("MOVD") && m != null && m.base.equals("RCX") && m.hasDisp) lastLoad.put(destReg(i), i);
+                    if (i.getMnemonicString().equals("DIVSS")) {
+                        Instruction num = lastLoad.get(destReg(i)), den = lastLoad.get(i.getDefaultOperandRepresentation(1));
+                        if (num != null && den != null) divs.add(new Instruction[]{num, den});
+                    }
+                }
+                if (divs.size() >= 2) {
+                    put("VIEW_OBJ", gm.disp, "worldToScreenCoord calls the view getter " + at(g.get(0)));
+                    put("VIEW_OBJ_SCALE_BASE", lm.disp, "and passes view+this to the rescale: " + at(lea));
+                    put("VIEW_OUT_W", mem(divs.get(0)[0]).disp, "rescale numerator for x: " + at(divs.get(0)[0]));
+                    put("VIEW_IN_W", mem(divs.get(0)[1]).disp, "rescale divisor for x: " + at(divs.get(0)[1]));
+                    put("VIEW_OUT_H", mem(divs.get(1)[0]).disp, "rescale numerator for y: " + at(divs.get(1)[0]));
+                    put("VIEW_IN_H", mem(divs.get(1)[1]).disp, "rescale divisor for y: " + at(divs.get(1)[1]));
+                }
+                break;
+            }
+        }
+
+        // ---- the pending menu-action record. The widget-menu action method (a virtual; reached from its
+        //      vtable, not called by name) bumps a u16 sequence, stores its three int arguments, sets a
+        //      "pending" byte to 1, and then looks the widget up through the interface manager with the
+        //      first two -- which is what ties it to the child lookup found above.
+        if (wl != null) {
+            Address childLookup = null;
+            for (Reference r : getReferencesTo(wl.lookup)) {
+                Function f = getFunctionContaining(r.getFromAddress());
+                if (f != null && out.containsKey("IFTYPE_CHILDREN_COUNT") && f.getBody().contains(r.getFromAddress())) {
+                    List<Instruction> b = listing(f.getEntryPoint(), 60);
+                    for (Instruction i : b) { Mem m = memOf(i); if (m != null && m.hasDisp && m.disp == val("IFTYPE_CHILDREN_COUNT")) { childLookup = f.getEntryPoint(); break; } }
+                }
+                if (childLookup != null) break;
+            }
+            if (childLookup != null) {
+                for (Reference r : getReferencesTo(childLookup)) {
+                    Function f = getFunctionContaining(r.getFromAddress());
+                    if (f == null) continue;
+                    List<Instruction> pro = linear(f.getEntryPoint(), 24);
+                    Long seq = null, pend = null, a1 = null, a2 = null, a3 = null;
+                    String lea3 = null;
+                    Instruction seqI = null;
+                    for (Instruction i : pro) {
+                        String s = i.toString();
+                        Mem m = memOf(i);
+                        if (m == null || !m.base.equals("RCX") || !m.hasDisp) {
+                            // `lea r14,[rcx+X]; ... mov dword [r14],r9d` stores the third argument
+                            if (s.startsWith("MOV dword ptr [") && s.endsWith(",R9D") && lea3 != null && s.contains("[" + lea3 + "]")) a3 = lea3Disp;
+                            continue;
+                        }
+                        if (s.startsWith("INC word ptr")) { seq = m.disp; seqI = i; }
+                        if (s.startsWith("LEA ")) { lea3 = destReg(i); lea3Disp = m.disp; }
+                        if (s.startsWith("MOV dword ptr") && s.endsWith(",EDX")) a1 = m.disp;
+                        if (s.startsWith("MOV dword ptr") && s.endsWith(",R8D")) a2 = m.disp;
+                        if (s.startsWith("MOV dword ptr") && s.endsWith(",R9D")) a3 = m.disp;
+                        if (s.startsWith("MOV byte ptr") && s.endsWith(",0x1")) pend = m.disp;
+                    }
+                    if (seq != null && pend != null && a1 != null && a2 != null && a3 != null) {
+                        String w = "widget-menu action method rva 0x" + Long.toHexString(rva(f.getEntryPoint())) + " (calls the child lookup with its first two arguments)";
+                        put("PENDING_ACTION_PACKED_ID", a1, w + " stores its 1st int argument here");
+                        put("PENDING_ACTION_INDEX", a2, w + " stores its 2nd int argument here");
+                        put("PENDING_ACTION_TARGET", a3, w + " stores its 3rd int argument here");
+                        put("PENDING_ACTION_SEQ", seq, w + ": " + at(seqI));
+                        put("PENDING_ACTION_PENDING", pend, w + " sets this byte to 1");
+                        notes.add("DO_ACTION candidate for a hook-and-log run: rva 0x" + Long.toHexString(rva(f.getEntryPoint()))
+                                + " is the widget-menu action path (its args are a packed widget id and a component index, NOT scene x/y)");
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    private long lea3Disp;
+
+    // ===========================================================================================
+    // derive3: the action senders (offsets.hpp's ACTIONS block). Found on client-241-3 by a
+    // hook-and-log run that watched real clicks, then written as structural rules -- each must match
+    // EXACTLY ONE function or it writes nothing (an ambiguous match is a note, never a guess).
+    // ===========================================================================================
+    private void derive3() {
+        // ---- the per-frame tick: the function that does `inc dword [client+CYCLE]`
+        long cyc = val("CYCLE");
+        if (cyc > 0) {
+            Instruction inc = findInc(cyc);
+            Function tick = inc == null ? null : getFunctionContaining(inc.getAddress());
+            if (tick != null) put("ACT_TICK", rva(tick.getEntryPoint()), "the function that increments CYCLE once per frame: " + at(inc));
+        }
+
+        // ---- the packet-start function P: called as `mov r8,[reg+CONN]; add r8,IMM; mov edx,OPCODE; call P`
+        //      (the order varies). The callee that shape reaches most often is P.
+        Pattern movEdx = Pattern.compile("MOV EDX,0x([0-9a-f]+)");
+        Map<Address, Integer> count = new LinkedHashMap<>();
+        Instruction cur = getFirstInstruction();
+        java.util.ArrayDeque<String> win = new java.util.ArrayDeque<>();
+        while (cur != null && text.contains(cur.getAddress())) {
+            String s = cur.toString();
+            if (cur.getMnemonicString().equals("CALL") && win.size() >= 4) {
+                boolean edx = false, add = false, mov = false;
+                for (String w : win) {
+                    if (movEdx.matcher(w).matches()) edx = true;
+                    if (w.startsWith("ADD R8,0x")) add = true;
+                    if (w.startsWith("MOV R8,qword ptr [") && w.contains(" + 0x")) mov = true;
+                }
+                Address t = callTarget(cur);
+                if (edx && add && mov && t != null) count.merge(t, 1, Integer::sum);
+            }
+            win.addLast(s);
+            if (win.size() > 5) win.removeFirst();
+            cur = cur.getNext();
+        }
+        Address p = null;
+        int best = 0, second = 0;
+        for (Map.Entry<Address, Integer> e : count.entrySet()) {
+            if (e.getValue() > best) { second = best; best = e.getValue(); p = e.getKey(); }
+            else if (e.getValue() > second) second = e.getValue();
+        }
+        if (p == null || best < 20 || best < 2 * second) {
+            notes.add("actions: no clear packet-start function (best " + best + ", next " + second + ")");
+            return;
+        }
+        notes.add("packet-start function rva 0x" + Long.toHexString(rva(p)) + " (" + best + " call sites)");
+
+        // ---- group P's callers: each sender, with the distinct packet opcodes it starts
+        Map<Function, Set<Long>> senders = new LinkedHashMap<>();
+        for (Reference r : getReferencesTo(p)) {
+            Function f = getFunctionContaining(r.getFromAddress());
+            Instruction call = getInstructionAt(r.getFromAddress());
+            if (f == null || call == null) continue;
+            Long imm = null;
+            Instruction q = call;
+            for (int k = 0; k < 6 && q != null; k++) {
+                q = q.getPrevious();
+                if (q == null) break;
+                Matcher m = movEdx.matcher(q.toString());
+                if (m.matches()) { imm = Long.parseLong(m.group(1), 16); break; }
+            }
+            senders.computeIfAbsent(f, x -> new LinkedHashSet<>()).add(imm);
+        }
+        List<Function> npc = new ArrayList<>(), loc = new ArrayList<>(), walk = new ArrayList<>();
+        Pattern cmpArg = Pattern.compile("CMP dword ptr \\[RDX( \\+ 0x[48])?\\],EAX");
+        for (Map.Entry<Function, Set<Long>> e : senders.entrySet()) {
+            Function f = e.getKey();
+            List<Instruction> body = new ArrayList<>();
+            for (Instruction i : currentProgram.getListing().getInstructions(f.getBody(), true)) body.add(i);
+            if (body.isEmpty()) continue;
+            int ops = e.getValue().size();
+            boolean cmpR8 = false, cmpR9 = false, usesR8 = false;
+            int argCmps = 0;
+            for (int k = 0; k < body.size(); k++) {
+                String s = body.get(k).toString();
+                if (s.equals("CMP R8D,0x1")) cmpR8 = true;
+                if (s.equals("CMP R9D,0x1")) cmpR9 = true;
+                if (k < 20 && cmpArg.matcher(s).matches()) argCmps++;
+                if (k < 12 && s.matches("MOV E?[A-Z0-9]+,R8D?")) usesR8 = true;
+            }
+            // NPC option: tests its entity argument first, five opcodes, switches on the option (R8D)
+            if (ops >= 5 && cmpR8 && body.get(0).toString().equals("TEST RDX,RDX")) npc.add(f);
+            // object option: five opcodes, switches on the option (R9D)
+            if (ops >= 5 && cmpR9) loc.add(f);
+            // menu walk: one opcode; its {level,x,y} argument compared against the last-destination
+            // global first; no third argument (the direct-click walk takes one in R8D)
+            if (ops == 1 && argCmps == 3 && !usesR8) walk.add(f);
+        }
+        putUnique("ACT_NPC_OP", npc, "the only packet sender that tests its entity argument, starts five different packets and switches on the option in R8D");
+        putUnique("ACT_LOC_OP", loc, "the only packet sender that starts five different packets and switches on the option in R9D");
+        putUnique("ACT_WALK", walk, "the only one-packet sender that compares a three-int {level,x,y} argument against the last-destination global and takes no third argument (the menu's Walk here)");
+    }
+
+    private void putUnique(String name, List<Function> fs, String why) {
+        if (fs.size() == 1) {
+            put(name, rva(fs.get(0).getEntryPoint()), why + ": rva 0x" + Long.toHexString(rva(fs.get(0).getEntryPoint())));
+        } else {
+            StringBuilder b = new StringBuilder();
+            for (Function f : fs) b.append(" 0x").append(Long.toHexString(rva(f.getEntryPoint())));
+            notes.add(name + ": " + fs.size() + " candidates (" + b.toString().trim() + ") -- not derived");
+        }
+    }
+
+    /** A straight run of `n` instructions from `a`, no flow following (prologues). */
+    private List<Instruction> linear(Address a, int n) {
+        List<Instruction> l = new ArrayList<>();
+        Instruction i = getInstructionAt(a);
+        for (int k = 0; k < n && i != null; k++, i = i.getNext()) l.add(i);
+        return l;
+    }
+
+    private String i2s(Instruction i) { return i.toString(); }
+
+    private String hexAt(long addr) { return String.format("%06x", addr - base); }
+
+    /** The function containing the first instruction that references string `name`. */
+    private Function functionReferencing(String name) {
+        Instruction i = firstRef(name);
+        return i == null ? null : getFunctionContaining(i.getAddress());
+    }
+
+    /**
+     * A usertype registration's (name -> {offset, instruction address}) pairs, for the properties
+     * registered with an explicit field offset: `MOV dword ptr [RBP + 0x20],OFFSET` ... `LEA RAX,[name]`
+     * ... `CALL register`. Properties registered without an offset map to {-1, addr}.
+     */
+    private Map<String, long[]> propertyTable(Function f) {
+        Map<String, long[]> tab = new LinkedHashMap<>();
+        Long imm = null;
+        String pend = null;
+        long pendAt = 0;
+        for (Instruction i : currentProgram.getListing().getInstructions(f.getBody(), true)) {
+            String s = i.toString();
+            String mn = i.getMnemonicString();
+            if (mn.equals("MOV") && s.startsWith("MOV dword ptr [RBP + 0x20],0x")) imm = Long.parseLong(s.substring(s.lastIndexOf("0x") + 2), 16);
+            if (mn.equals("LEA")) {
+                for (Reference r : i.getReferencesFrom()) {
+                    String str = stringAt(r.getToAddress());
+                    if (str != null) { pend = str; pendAt = i.getAddress().getOffset(); }
+                }
+            }
+            if (mn.equals("CALL") && pend != null) {
+                tab.putIfAbsent(pend, new long[]{imm == null ? -1 : imm, pendAt});
+                pend = null;
+                imm = null;
+            }
+        }
+        return tab;
+    }
+
+    /** The C string at `a` if it is printable ASCII (defined as data or not). */
+    private String stringAt(Address a) {
+        try {
+            var d = getDataAt(a);
+            if (d != null && d.hasStringValue()) return String.valueOf(d.getValue());
+            if (!currentProgram.getMemory().getBlock(a).isInitialized() || currentProgram.getMemory().getBlock(a).isExecute()) return null;
+            StringBuilder sb = new StringBuilder();
+            for (int k = 0; k < 64; k++) {
+                int b = currentProgram.getMemory().getByte(a.add(k)) & 0xff;
+                if (b == 0) break;
+                if (b < 0x20 || b > 0x7e) return null;
+                sb.append((char) b);
+            }
+            return sb.length() >= 3 ? sb.toString() : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** NxtString getter lambdas in the `span` bytes after function f: {S, insn address}, address order. */
+    private List<long[]> ssoGettersAfter(Function f, long span) {
+        List<long[]> res = new ArrayList<>();
+        Address end = f.getBody().getMaxAddress();
+        Instruction i = getInstructionAfter(end);
+        Pattern flag = Pattern.compile("MOVZX EAX,byte ptr \\[RCX \\+ 0x([0-9a-f]+)\\]");
+        Pattern load = Pattern.compile("MOV RAX,qword ptr \\[RCX \\+ 0x([0-9a-f]+)\\]");
+        while (i != null && i.getAddress().subtract(end) < span) {
+            Matcher m = flag.matcher(i.toString());
+            if (m.matches() && i.getNext() != null && i.getNext().toString().equals("SHR AL,0x7")) {
+                long fl = Long.parseLong(m.group(1), 16);
+                Instruction j = i.getNext();
+                for (int k = 0; k < 4 && j != null; k++) {
+                    j = j.getNext();
+                    if (j == null) break;
+                    Matcher ml = load.matcher(j.toString());
+                    if (ml.matches()) {
+                        long s = Long.parseLong(ml.group(1), 16);
+                        if (s + 0x17 == fl) res.add(new long[]{s, i.getAddress().getOffset()});
+                        break;
+                    }
+                }
+            }
+            i = i.getNext();
+        }
+        return res;
+    }
+
+    static final class WidgetLookup {
+        long mgr, count, entryCount = -1, entryData = -1;
+        Address lookup, sentinel;
+        Instruction getterInsn, cmpInsn, arrInsn, leaInsn, entryCountInsn, entryDataInsn, sentinelInsn;
+    }
+
+    private WidgetLookup findWidgetLookup(long clientRva) {
+        // every one-instruction client getter with a large displacement, then its callers' next call
+        Pattern get = Pattern.compile("MOV RAX,qword ptr \\[RCX \\+ 0x([0-9a-f]+)\\]");
+        for (Function f : currentProgram.getFunctionManager().getFunctions(true)) {
+            if (f.getBody().getNumAddresses() > 16) continue;
+            Instruction a = getInstructionAt(f.getEntryPoint());
+            if (a == null || a.getNext() == null || !a.getNext().getMnemonicString().equals("RET")) continue;
+            Matcher m = get.matcher(a.toString());
+            if (!m.matches()) continue;
+            long disp = Long.parseLong(m.group(1), 16);
+            if (disp < 0x100000) continue;
+            for (Reference r : getReferencesTo(f.getEntryPoint())) {
+                Instruction call = getInstructionAt(r.getFromAddress());
+                if (call == null || !call.getMnemonicString().equals("CALL")) continue;
+                Instruction j = call;
+                for (int k = 0; k < 4; k++) {
+                    j = j.getNext();
+                    if (j == null) break;
+                    if (!j.getMnemonicString().equals("CALL")) continue;
+                    Address t = callTarget(j);
+                    WidgetLookup wl = t == null ? null : parseWidgetLookup(t);
+                    if (wl != null) { wl.mgr = disp; wl.getterInsn = a; return wl; }
+                    break;
+                }
+            }
+        }
+        return null;
+    }
+
+    private WidgetLookup parseWidgetLookup(Address t) {
+        List<Instruction> body = listing(t, 60);
+        boolean split = false;
+        WidgetLookup wl = new WidgetLookup();
+        wl.lookup = t;
+        for (Instruction i : body) {
+            String s = i.toString();
+            if ((s.startsWith("SAR") || s.startsWith("SHR")) && s.endsWith(",0x10")) split = true;
+            Mem m = memOf(i);
+            if (m == null) continue;
+            if (i.getMnemonicString().equals("CMP") && m.base.equals("RCX") && m.hasDisp && m.disp > 0x1000 && wl.cmpInsn == null) { wl.count = m.disp; wl.cmpInsn = i; }
+            if (wl.cmpInsn != null && i.getMnemonicString().equals("MOV") && m.base.equals("RCX") && m.hasDisp && m.disp == wl.count + 8 && wl.arrInsn == null) wl.arrInsn = i;
+            if (s.matches("LEA ([A-Z0-9]+),\\[([A-Z0-9]+) \\+ \\2\\*0x2\\]") && wl.leaInsn == null) wl.leaInsn = i;
+            if (wl.arrInsn != null && m.scale == 8 && !m.index.isEmpty() && m.hasDisp && wl.entryCountInsn == null) { wl.entryCount = m.disp; wl.entryCountInsn = i; }
+            if (wl.entryCountInsn != null && i.getMnemonicString().equals("MOV") && m.hasDisp && m.index.isEmpty() && m.disp == wl.entryCount + 8 && wl.entryDataInsn == null && !m.base.equals("RSP")) { wl.entryData = m.disp; wl.entryDataInsn = i; }
+            if (i.getMnemonicString().equals("LEA") && m.absolute != null && !text.contains(m.absolute)) { wl.sentinel = m.absolute; wl.sentinelInsn = i; }
+        }
+        return split && wl.cmpInsn != null && wl.arrInsn != null && wl.leaInsn != null ? wl : null;
+    }
+
+    static final class HashWalk {
+        long buckets = -1, count = -1, next = -1, value = -1;
+        boolean keyAtZero;
+        Instruction bucketsInsn, countInsn, keyInsn, nextInsn, valueInsn;
+    }
+
+    /**
+     * The hash-table walk shape both registry lookups share:
+     *   mov r,dword [T+COUNT]; mov r2,qword [T+BUCKETS]; ... div ...; mov rax,[r2+idx*8]
+     *   loop: cmp key,dword [rax]; je hit; mov rax,qword [rax+NEXT]; test; jnz loop
+     *   hit:  ... mov rax,qword [rax+VALUE]      (the last node-relative qword load)
+     * Returns null unless the bucket pair and the chain step are all present.
+     */
+    private HashWalk hashWalk(List<Instruction> body) {
+        HashWalk h = new HashWalk();
+        int div = -1;
+        for (int k = 0; k < body.size(); k++) if (body.get(k).getMnemonicString().equals("DIV")) { div = k; break; }
+        if (div < 0) return null;
+        for (int k = div - 1; k >= Math.max(0, div - 8); k--) {
+            Instruction i = body.get(k);
+            Mem m = memOf(i);
+            if (m == null || !m.hasDisp || !m.index.isEmpty() || !i.getMnemonicString().equals("MOV")) continue;
+            if (i.toString().contains("dword ptr") && h.countInsn == null) { h.count = m.disp; h.countInsn = i; }
+            if (i.toString().contains("qword ptr") && h.bucketsInsn == null) { h.buckets = m.disp; h.bucketsInsn = i; }
+        }
+        for (int k = div + 1; k < body.size(); k++) {
+            Instruction i = body.get(k);
+            String s = i.toString();
+            Mem m = memOf(i);
+            if (i.getMnemonicString().equals("CMP") && s.matches("CMP [A-Z0-9]+,dword ptr \\[RAX\\]") && h.keyInsn == null) { h.keyAtZero = true; h.keyInsn = i; }
+            if (m == null || !m.hasDisp || !m.index.isEmpty() || !s.startsWith("MOV RAX,qword ptr [RAX")) continue;
+            if (h.nextInsn == null) { h.next = m.disp; h.nextInsn = i; }
+            else if (m.disp != h.next) { h.value = m.disp; h.valueInsn = i; }
+        }
+        if (h.value < 0) {
+            // the group lookup returns through RCX: `mov rax,qword ptr [RCX + VALUE]` after the miss check
+            for (int k = body.size() - 1; k > div; k--) {
+                Instruction i = body.get(k);
+                Mem m = memOf(i);
+                if (m != null && m.hasDisp && m.index.isEmpty() && i.toString().startsWith("MOV RAX,qword ptr [RCX") && m.disp != h.buckets && m.disp != h.count) {
+                    h.value = m.disp; h.valueInsn = i; break;
+                }
+            }
+        }
+        return h.bucketsInsn != null && h.countInsn != null && h.nextInsn != null ? h : null;
     }
 
     // ===========================================================================================

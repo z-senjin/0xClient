@@ -47,8 +47,14 @@ inline std::uintptr_t moduleBase() {
     return b;
 }
 
-/// The client object, or 0 if the game has not built it yet (it is null for the first few seconds).
-inline std::uintptr_t clientObj() { return rdp(moduleBase() + off::CLIENT_OBJ_PTR); }
+/// The address of a GLOBAL (an image-base-relative RVA from offsets.hpp), or 0 when that RVA is 0 --
+/// the loader's "not measured on this build" sentinel (client/offsets_json.hpp). Every read through a
+/// 0 address fails closed (readable() refuses the first page), so a refused global reads as "not up".
+inline std::uintptr_t globalAddr(std::uintptr_t rva) { return rva ? moduleBase() + rva : 0; }
+
+/// The client object, or 0 if the game has not built it yet (it is null for the first few seconds),
+/// or CLIENT_OBJ_PTR was not derived for this build.
+inline std::uintptr_t clientObj() { return rdp(globalAddr(off::CLIENT_OBJ_PTR)); }
 
 /// The scene object, or 0.
 inline std::uintptr_t scene() {
@@ -371,7 +377,7 @@ inline std::uintptr_t widgetObj(int id) {
     std::uintptr_t w = rdp(cdata + static_cast<std::uintptr_t>(comp) * 16 + 8);
     // The empty group's slot holds a shared static empty object; comparing the pointee against the
     // sentinel's control field is exactly what the client's own null check does.
-    if (!w || w == rdp(moduleBase() + off::IFACE_EMPTY_SENTINEL + 8)) return 0;
+    if (!w || w == (off::IFACE_EMPTY_SENTINEL ? rdp(globalAddr(off::IFACE_EMPTY_SENTINEL) + 8) : 0)) return 0;
     return w;
 }
 
@@ -480,7 +486,7 @@ inline WidgetTreeScan scanWidgetTree() {
     const std::uint64_t gcount = rd<std::uint64_t>(mgr + off::IFACE_GROUP_COUNT);
     const std::uintptr_t garr = rdp(mgr + off::IFACE_GROUP_ARRAY);
     if (!garr || gcount == 0 || gcount > 0x1000) return s;
-    const std::uintptr_t empty = rdp(moduleBase() + off::IFACE_EMPTY_SENTINEL + 8);
+    const std::uintptr_t empty = (off::IFACE_EMPTY_SENTINEL ? rdp(globalAddr(off::IFACE_EMPTY_SENTINEL) + 8) : 0);
 
     const int SLOTS  = off::IFTYPE_SCAN_SPAN / 4;   // int slots
     const int PSLOTS = off::IFTYPE_SCAN_SPAN / 8;   // pointer slots
@@ -890,20 +896,20 @@ inline std::string widgetChainString(int id) {
 /// One varp value by id. 0 when the array is not up yet or the id is out of range.
 inline int varp(int id) {
     if (id < 0) return 0;
-    std::uintptr_t arr = rdp(moduleBase() + off::VARP_ARRAY_PTR);
+    std::uintptr_t arr = rdp(globalAddr(off::VARP_ARRAY_PTR));
     if (!arr) return 0;
     return rd<std::int32_t>(arr + static_cast<std::uintptr_t>(id) * 4);
 }
 
 /// The container node for `containerId`, or 0. Bounded walk: the sentinel sits one bucket past the end.
 inline std::uintptr_t containerNode(int containerId) {
-    std::int32_t mask = rd<std::int32_t>(moduleBase() + off::CONTAINER_MASK);
+    std::int32_t mask = rd<std::int32_t>(globalAddr(off::CONTAINER_MASK));
     if (mask <= 0 || mask > 0x10000) return 0;               // never a real bucket count this big
     // The global at CONTAINER_BUCKETS is a POINTER CELL to the heap-allocated bucket array, not the
     // array itself: the client's own lookup is `mov rdx,[CONTAINER_BUCKETS]; mov rax,[rdx+idx*8]`
     // (240-6 FUN_140032610, 241-3 the same shape). An earlier reading of this as an inline array
     // was never confirmed against a running game.
-    std::uintptr_t buckets = rdp(moduleBase() + off::CONTAINER_BUCKETS);
+    std::uintptr_t buckets = rdp(globalAddr(off::CONTAINER_BUCKETS));
     if (!buckets) return 0;
     std::uintptr_t node = rdp(buckets + static_cast<std::uintptr_t>(static_cast<std::uint32_t>(containerId) % mask) * 8);
     std::uintptr_t sentinel = rdp(buckets + static_cast<std::uintptr_t>(mask) * 8);
@@ -959,6 +965,9 @@ inline int containerQty(int containerId, int slot) {
 ///
 /// Returns false when the point is behind the camera or otherwise off in the weeds. Do not draw it.
 inline bool projectFine(int fineX, int fineHeight, int fineY, float& outX, float& outY) {
+    // 0 = not derived for this build (the loader refuses an unmeasured RVA): calling a stale address
+    // would crash the game, so there is simply no projection until the pipeline derives it.
+    if (off::WORLD_TO_SCREEN == 0) return false;
     using Fn = float* (__fastcall*)(void*, float*, int*);
     auto fn = reinterpret_cast<Fn>(moduleBase() + off::WORLD_TO_SCREEN);
 
@@ -980,58 +989,7 @@ inline bool project(int sceneX, int sceneY, float& outX, float& outY) {
 // ---------------------------------------------------------------------------------------------------
 // Doing something
 // ---------------------------------------------------------------------------------------------------
-/// Perform a menu action, exactly as if you had clicked it. The client builds and sends the packet.
-///
-/// `sceneX`/`sceneY` are SCENE coordinates (0..103), not world ones. `opcode` is a menu action number
-/// from offsets.hpp. `targetId` is whatever that action targets -- for scenery it is the object id.
-///
-/// Returns true when the action was handed to the client, false when it was DROPPED: either the client
-/// object is not up yet, or DO_ACTION is 0 for this build (the address was never derived, and calling a
-/// guessed address crashes the game). The boolean is the only way a caller can tell an issued action
-/// from a silent no-op -- plugins must not report success on a false.
-///
-/// MUST be called from the game thread. Calling it from our own thread works most of the time and then
-/// crashes at the worst moment, so the overlay queues actions and the plugin tick runs them on a timer
-/// that is slow enough not to matter. If you make 0xClient do anything fancier than this, hook a
-/// per-frame function and run actions from there.
-inline bool doAction(int sceneX, int sceneY, int opcode, int targetId) {
-    std::uintptr_t c = clientObj();
-    if (!c) return false;
-    if (off::DO_ACTION == 0) {   // DO_ACTION 0 = not derived this build; acting would crash
-        // One line, ever: plugins tick many times a second and this drop is a build problem, not a
-        // per-call event. Goes to stdout, which OXC_LOG redirects to a file (dllmain.cpp).
-        static bool warned = false;
-        if (!warned) {
-            warned = true;
-            oxc::logf("[oxclient] doAction dropped: DO_ACTION not derived for this build\n");
-            std::fflush(stdout);
-        }
-        return false;
-    }
-    using Fn = void(__fastcall*)(void*, int, int, int, int, int, long long, int, int, long long);
-    auto fn = reinterpret_cast<Fn>(moduleBase() + off::DO_ACTION);
-    fn(reinterpret_cast<void*>(c), sceneX, sceneY, opcode, targetId, 0, 0, 0, 0, 0);
-    return true;
-}
-
-/// Walk to a SCENE tile. The game pathfinds and sends the movement itself; we only say where. Returns
-/// false when the action was dropped (see doAction) -- do not treat that as "walking".
-inline bool walkTo(int sceneX, int sceneY) {
-    return doAction(sceneX, sceneY, off::OP_WALK, 0);
-}
-
-/// Interact with an NPC by uid -- attack it, talk to it, pickpocket it, whatever `opcode` selects.
-///
-/// The uid IS the target: the client looks the NPC up in the same hashtable we walked to find it, so we
-/// do not have to care where it has moved to since. We still pass its tile because that is the shape
-/// doAction wants, and we look it up here so callers only need the uid. Returns false when the uid did
-/// not resolve (it despawned this frame) or the action was dropped (see doAction).
-inline bool interactNpc(int uid, int opcode) {
-    // NPC table only: a player sharing the uid must not become the "NPC" we hand the game.
-    bool found = false;
-    Entity target = findEntity(uid, false, found);
-    if (!found) return false;
-    return doAction(target.sceneX, target.sceneY, opcode, uid);
-}
+// doAction / walkTo / interactNpc live in client/actions.hpp: they queue the action, and the client's
+// own sender runs it on the game thread (no packet is built here, and none of it runs on our thread).
 
 }  // namespace oxc

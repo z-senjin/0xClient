@@ -1,538 +1,835 @@
 {
   "build": "241-3",
   "sha256": "166231c8f6bd05c7542b8f0d35eb64b0aad701a87ba6ba41f60c4706de946944",
-  "derived": "2026-10-06T03:50:59Z",
+  "derived": "2026-10-09T14:37:46Z",
   "source": "DeriveOffsets.java",
-  "notes": "",
+  "notes": "DO_ACTION candidate for a hook-and-log run: rva 0x372870 is the widget-menu action path (its args are a packed widget id and a component index, NOT scene x/y) | packet-start function rva 0x6795c0 (77 call sites)",
   "offsets": {
     "BUILD_ID": {
       "value": 995120,
       "status": "derived",
+      "kind": "code",
       "evidence": "entry of the ClientState registration, the function that references \"getVarp\"",
       "previous": 995248
     },
     "CLIENT_OBJ_PTR": {
       "value": 15305752,
-      "status": "derived",
-      "evidence": "getStatEffectiveLevel leaf loads the client object: 0f5815  MOV RCX,qword ptr [0x140e98c18]"
+      "status": "verified",
+      "kind": "global",
+      "evidence": "getStatEffectiveLevel leaf loads the client object: 0f5815  MOV RCX,qword ptr [0x140e98c18]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: all 25 skills' base level is the level their xp earns"
     },
     "DO_ACTION": {
       "value": 0,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): --------------------------------------------------------------------------------------------------- FUNCTIONS WE CALL (RVAs from the module base) --------------------------------------------------------------------------------------------------- The client's own \"do a menu action\" entry point. We call it instead of building network packets by hand: it takes the same arguments the real menu does, a"
+      "status": "suspect",
+      "kind": "code",
+      "since": "240-6",
+      "since_status": "suspect",
+      "evidence": "not derived on 241-3; value last suspect on 240-6: compiled default (client/offsets.hpp): --------------------------------------------------------------------------------------------------- FUNCTIONS WE CALL (RVAs from the module base) --------------------------------------------------------------------------------------------------- The client's own \"do a menu action\" entry point. We call it instead of building network packets by hand: it takes the same arguments the real menu does, a"
+    },
+    "ACT_TICK": {
+      "value": 439296,
+      "status": "verified",
+      "kind": "code",
+      "evidence": "the function that increments CYCLE once per frame: 06b4e2  INC dword ptr [RSI + 0x2164]",
+      "verified_on": "2026-10-09",
+      "verification": "hook-and-log 2026-10-09: queued walk and NPC actions ran from this tick's breakpoint on the game thread and took effect in game"
+    },
+    "ACT_WALK": {
+      "value": 3700256,
+      "status": "verified",
+      "kind": "code",
+      "evidence": "the only one-packet sender that compares a three-int {level,x,y} argument against the last-destination global and takes no third argument (the menu's Walk here): rva 0x387620",
+      "verified_on": "2026-10-09",
+      "verification": "hook-and-log 2026-10-09: the client's own Walk here passed {plane, x, y} = {1, 3206, 3221}; a doAction walk passed {1, 3209, 3221} and the character walked there"
+    },
+    "ACT_NPC_OP": {
+      "value": 3705104,
+      "status": "verified",
+      "kind": "code",
+      "evidence": "the only packet sender that tests its entity argument, starts five different packets and switches on the option in R8D: rva 0x388910",
+      "verified_on": "2026-10-09",
+      "verification": "hook-and-log 2026-10-09: the client's own Talk-to passed {uid 2828, option 1, flag 0}; doAction option 1 and 2 on uid 2828 were sent and acted on in game"
+    },
+    "ACT_LOC_OP": {
+      "value": 3702000,
+      "status": "derived",
+      "kind": "code",
+      "evidence": "the only packet sender that starts five different packets and switches on the option in R9D: rva 0x387cf0",
+      "plausible": "hook-and-log 2026-10-09: the client's own Open on a door passed {plane 1, x 3207, y 3222, id 1543, option 1, flag 0} -- the layout doAction builds; not yet sent by doAction itself"
     },
     "WORLD_TO_SCREEN": {
       "value": 2222976,
-      "status": "derived",
+      "status": "verified",
+      "kind": "code",
       "evidence": "Graphics.worldToScreenCoord leaf (stored at wrapper+0x10 by its T1)",
-      "previous": 2223168
+      "previous": 2223168,
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: your position projects to (592,363) on a 1298x861 canvas"
     },
     "CAMERA_FINE_X": {
       "value": 562632,
-      "status": "derived",
+      "status": "verified",
+      "kind": "field",
       "evidence": "three consecutive ints the projection reads off the client: 21eba4  MOV ESI,dword ptr [R15 + 0x895c8]",
-      "previous": 562648
+      "previous": 562648,
+      "note": "CHANGED from a value verified on 241-1: review before merging",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: camera (7077,4816), you (6976,5888)"
     },
     "CAMERA_FINE_H": {
       "value": 562636,
       "status": "derived",
+      "kind": "field",
       "evidence": "21ebab  MOV EDI,dword ptr [R15 + 0x895cc]",
-      "previous": 562652
+      "previous": 562652,
+      "plausible": "self-check 2026-10-09: camera height -2539 (negative is up)"
     },
     "CAMERA_FINE_Y": {
       "value": 562640,
-      "status": "derived",
+      "status": "verified",
+      "kind": "field",
       "evidence": "21ebb2  MOV EBX,dword ptr [R15 + 0x895d0]",
-      "previous": 562656
+      "previous": 562656,
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: camera (7077,4816), you (6976,5888)"
     },
     "VIEW_OBJ": {
       "value": 144,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: the projection's view object, first qword it takes off the client: 2202c1  MOV RCX,qword ptr [R15 + 0x90]"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "worldToScreenCoord calls the view getter 6ccf70  MOV RAX,qword ptr [RCX + 0x90]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: both scale pairs read the canvas size 1298x861"
     },
     "VIEW_OBJ_SCALE_BASE": {
       "value": 16,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): the scales hang off view+0x10, so a"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "and passes view+this to the rescale: 21ec6f  LEA RCX,[RAX + 0x10]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: both scale pairs read the canvas size 1298x861"
     },
     "VIEW_IN_W": {
       "value": 32,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): x rescale denominator (a WIDTH: 1606 live)"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "rescale divisor for x: 61aa38  MOVD XMM0,dword ptr [RCX + 0x20]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: both scale pairs read the canvas size 1298x861"
     },
     "VIEW_IN_H": {
       "value": 36,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): y rescale denominator (a HEIGHT: 900 live)"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "rescale divisor for y: 61aa69  MOVD XMM0,dword ptr [RCX + 0x24]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: both scale pairs read the canvas size 1298x861"
     },
     "VIEW_OUT_W": {
       "value": 92,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): x rescale numerator   (a WIDTH: 1606 live)"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "rescale numerator for x: 61aa30  MOVD XMM2,dword ptr [RCX + 0x5c]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: both scale pairs read the canvas size 1298x861"
     },
     "VIEW_OUT_H": {
       "value": 96,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): y rescale numerator   (a HEIGHT: 900 live)"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "rescale numerator for y: 61aa72  MOVD XMM2,dword ptr [RCX + 0x60]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: both scale pairs read the canvas size 1298x861"
     },
     "SCENE": {
       "value": 51840,
-      "status": "derived",
+      "status": "verified",
+      "kind": "field",
       "evidence": "getMapCoordinate leaf: 21af4a  MOV R8,qword ptr [RAX + 0xca80]",
-      "previous": 51856
+      "previous": 51856,
+      "note": "CHANGED from a value verified on 241-1: review before merging",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: scene corner (3160,3168): in the world and chunk-aligned"
     },
     "LOCAL_PLAYER_IDX": {
       "value": 52300,
-      "status": "derived",
+      "status": "verified",
+      "kind": "field",
       "evidence": "playerFindSelf leaf: 3a82b8  MOV EDI,dword ptr [RDI + 0xcc4c]",
-      "previous": 52316
+      "previous": 52316,
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 2 handles PLAYER_IDS lists, yours included"
     },
     "PLAYER_COUNT": {
       "value": 52432,
-      "status": "shifted",
-      "evidence": "not derived; the nearest derived client-object fields on both sides (0xcc5c and 0x895d8) both moved by -0x10, so this one was moved with them. Verify before trusting. not derived on 241-3; carried from 241-1: carried; the nearest derived client-object fields on both sides (0xcc5c, 0x895d8) did not move, so this one most likely did not either. not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): The player handle table: PLAYER_COUNT is how many entries PLAYER_IDS holds, and the ids sit inline right after the count (hence array = count + 4). 0xFFFFFFFF = an empty slot.  HOW FOUND (client-240-6): the client resolves these handles through its own player table, over and over. FUN_140063a06 is the shape in full: `movsxd r12,[client+0xCCE0]; jle skip; lea r15,[client+0xCCE4]`, then per entry `m",
-      "previous": 52448
+      "status": "verified",
+      "kind": "field",
+      "evidence": "the player-list walk reads the count: 0616fd  MOVSXD R12,dword ptr [R13 + 0xccd0]",
+      "previous": 52448,
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 2 handles PLAYER_IDS lists, yours included"
     },
     "PLAYER_IDS": {
       "value": 52436,
-      "status": "shifted",
-      "evidence": "not derived; the nearest derived client-object fields on both sides (0xcc5c and 0x895d8) both moved by -0x10, so this one was moved with them. Verify before trusting. not derived on 241-3; carried from 241-1: carried; the nearest derived client-object fields on both sides (0xcc5c, 0x895d8) did not move, so this one most likely did not either. not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): ",
-      "previous": 52452
+      "status": "verified",
+      "kind": "field",
+      "evidence": "takes the inline id array right after it: 06170d  LEA R15,[R13 + 0xccd4], and looks each id up in the player table: 061725  MOV ECX,dword ptr [R14 + 0x70]",
+      "previous": 52452,
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 2 handles PLAYER_IDS lists, yours included"
     },
     "SKILL_EFFECTIVE": {
       "value": 13136,
-      "status": "derived",
+      "status": "verified",
+      "kind": "field",
       "evidence": "getStatEffectiveLevel leaf reads the array: 0f5828  MOV EAX,dword ptr [RCX + RAX*0x4 + 0x3350]",
-      "previous": 13152
+      "previous": 13152,
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: 25 of 25 skills read their base level as effective"
     },
     "SKILL_BASE": {
       "value": 13236,
-      "status": "derived",
+      "status": "verified",
+      "kind": "field",
       "evidence": "getStatBaseLevel leaf reads the array: 0f5888  MOV EAX,dword ptr [RCX + RAX*0x4 + 0x33b4]",
-      "previous": 13252
+      "previous": 13252,
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: all 25 skills' base level is the level their xp earns"
     },
     "SKILL_XP": {
       "value": 13336,
-      "status": "derived",
+      "status": "verified",
+      "kind": "field",
       "evidence": "getStatXP leaf reads the array: 0f5858  MOV EAX,dword ptr [RCX + RAX*0x4 + 0x3418]",
-      "previous": 13352
+      "previous": 13352,
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: all 25 skills' base level is the level their xp earns"
     },
     "RUN_ENERGY": {
       "value": 13504,
-      "status": "shifted",
-      "evidence": "not derived; the nearest derived client-object fields on both sides (0x3428 and 0x49b8) both moved by -0x10, so this one was moved with them. Verify before trusting. not derived on 241-3; carried from 241-1: carried; the nearest derived client-object fields on both sides (0x3428, 0x49b8) did not move, so this one most likely did not either. not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): SUSPECT: 0..10000 on the build it came from",
-      "previous": 13520
+      "status": "suspect",
+      "kind": "field",
+      "since": "240-6",
+      "since_status": "suspect",
+      "evidence": "not derived on 241-3; value last suspect on 240-6: compiled default (client/offsets.hpp): SUSPECT: 0..10000 on the build it came from",
+      "previous": 13520,
+      "inference": "not derived; the nearest derived client object fields on both sides (0x3428 and 0x49b8) both moved by -0x10, so this one was moved with them. Verify before trusting",
+      "plausible": "self-check 2026-10-09: read 1 (0..10000 expected)"
     },
     "CYCLE": {
       "value": 8548,
-      "status": "derived",
-      "evidence": "GAME_STATE+4, confirmed by the per-frame increment 06b4e2  INC dword ptr [RSI + 0x2164]"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "GAME_STATE+4, confirmed by the per-frame increment 06b4e2  INC dword ptr [RSI + 0x2164]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: advanced 50 in one second"
     },
     "GAME_STATE": {
       "value": 8544,
       "status": "verified",
-      "evidence": "isLoggedIn leaf compares it to 30: 0f5941  CMP dword ptr [RAX + 0x2160],0x1e"
+      "kind": "field",
+      "evidence": "isLoggedIn leaf compares it to 30: 0f5941  CMP dword ptr [RAX + 0x2160],0x1e",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: read 30 while the local player is in the world (30 = logged in)"
     },
     "PENDING_ACTION_PACKED_ID": {
       "value": 144,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): The pending menu-action record -- what the game fills when you click a menu entry, and what its packet sender reads back. Three ints on the client object plus a small state tail: +0x90 packed widget id (groupId<<16 | componentId -- the same split FUN_1405B64D0 does) +0x94 component index / selector (-1 = \"the tile itself, no sub-object\") +0x98 target id (npc/player/loc index, as read back by the p"
+      "status": "derived",
+      "kind": "field",
+      "evidence": "widget-menu action method rva 0x372870 (calls the child lookup with its first two arguments) stores its 1st int argument here"
     },
     "PENDING_ACTION_INDEX": {
       "value": 148,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): "
+      "status": "derived",
+      "kind": "field",
+      "evidence": "widget-menu action method rva 0x372870 (calls the child lookup with its first two arguments) stores its 2nd int argument here"
     },
     "PENDING_ACTION_TARGET": {
       "value": 152,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): "
+      "status": "derived",
+      "kind": "field",
+      "evidence": "widget-menu action method rva 0x372870 (calls the child lookup with its first two arguments) stores its 3rd int argument here"
     },
     "PENDING_ACTION_SEQ": {
       "value": 156,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): u16"
+      "status": "derived",
+      "kind": "field",
+      "evidence": "widget-menu action method rva 0x372870 (calls the child lookup with its first two arguments): 372897  INC word ptr [RCX + 0x9c]"
     },
     "PENDING_ACTION_PENDING": {
       "value": 159,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): u8, 1 = action queued"
+      "status": "derived",
+      "kind": "field",
+      "evidence": "widget-menu action method rva 0x372870 (calls the child lookup with its first two arguments) sets this byte to 1"
     },
     "WORLD_MAP": {
       "value": 18856,
       "status": "derived",
+      "kind": "field",
       "evidence": "getMapOrigin leaf: 3a315b  MOV RCX,qword ptr [RAX + 0x49a8]",
-      "previous": 18872
+      "previous": 18872,
+      "plausible": "self-check 2026-10-09: world map object 000002526CA58BC0"
     },
     "WM_ORIGIN_LEVEL": {
       "value": 21688,
       "status": "derived",
-      "evidence": "getMapOrigin leaf reads the MapCoord: 3a3162  MOVSD XMM0,qword ptr [RCX + 0x54b8]"
+      "kind": "field",
+      "evidence": "getMapOrigin leaf reads the MapCoord: 3a3162  MOVSD XMM0,qword ptr [RCX + 0x54b8]",
+      "plausible": "self-check 2026-10-09: origin level 0"
     },
     "WM_ORIGIN_X": {
       "value": 21692,
       "status": "derived",
+      "kind": "field",
       "evidence": "MapCoord {level, x, z}: origin + 4"
     },
     "WM_ORIGIN_Z": {
       "value": 21696,
       "status": "derived",
+      "kind": "field",
       "evidence": "MapCoord {level, x, z}: origin + 8"
     },
     "WM_CENTRE_X": {
       "value": 21700,
       "status": "derived",
+      "kind": "field",
       "evidence": "the centre pair sits right after the MapCoord (origin + 0xC), same layout as 240-6"
     },
     "WM_CENTRE_Z": {
       "value": 21704,
       "status": "derived",
+      "kind": "field",
       "evidence": "origin + 0x10"
     },
     "VARP_ARRAY_PTR": {
       "value": 22406440,
       "status": "derived",
-      "evidence": "getVarp leaf: 0f5900  MOV RAX,qword ptr [0x14155e528]"
+      "kind": "global",
+      "evidence": "getVarp leaf: 0f5900  MOV RAX,qword ptr [0x14155e528]",
+      "plausible": "self-check 2026-10-09: 156 of the first 4000 varps nonzero"
     },
     "GET_VARBIT": {
       "value": 5956400,
       "status": "derived",
+      "kind": "code",
       "evidence": "getVarbit leaf is a thunk; its jump target: 5ae3e5  RET",
       "previous": 5956592
     },
     "CONTAINER_BUCKETS": {
       "value": 22346424,
-      "status": "derived",
-      "evidence": "then the bucket array pointer: 030d87  MOV RDX,qword ptr [0x14154fab8]"
+      "status": "verified",
+      "kind": "global",
+      "evidence": "then the bucket array pointer: 030d87  MOV RDX,qword ptr [0x14154fab8]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: container 93: 22 well-formed slots; nothing worn"
     },
     "CONTAINER_MASK": {
       "value": 22346432,
-      "status": "derived",
-      "evidence": "container lookup reads the bucket count first: 030d70  MOV R10,qword ptr [0x14154fac0]"
+      "status": "verified",
+      "kind": "global",
+      "evidence": "container lookup reads the bucket count first: 030d70  MOV R10,qword ptr [0x14154fac0]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: container 93: 22 well-formed slots; nothing worn"
     },
     "CONTAINER_NODE_IDS": {
       "value": 8,
-      "status": "derived",
-      "evidence": "invGetObjId: the array's first-entry pointer on the node: 030db5  MOV RDX,qword ptr [RAX + 0x8]"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "invGetObjId: the array's first-entry pointer on the node: 030db5  MOV RDX,qword ptr [RAX + 0x8]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: container 93: 22 well-formed slots; nothing worn"
     },
     "CONTAINER_NODE_IDS_END": {
       "value": 16,
-      "status": "derived",
-      "evidence": "invGetObjId: one-past-last pointer on the node: 030db9  MOV RCX,qword ptr [RAX + 0x10]"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "invGetObjId: one-past-last pointer on the node: 030db9  MOV RCX,qword ptr [RAX + 0x10]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: container 93: 22 well-formed slots; nothing worn"
     },
     "CONTAINER_NODE_QTYS": {
       "value": 32,
-      "status": "derived",
-      "evidence": "invGetNum: the array's first-entry pointer on the node: 030e12  MOV RDX,qword ptr [RAX + 0x20]"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "invGetNum: the array's first-entry pointer on the node: 030e12  MOV RDX,qword ptr [RAX + 0x20]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: container 93: 22 well-formed slots; nothing worn"
     },
     "CONTAINER_NODE_QTYS_END": {
       "value": 40,
-      "status": "derived",
-      "evidence": "invGetNum: one-past-last pointer on the node: 030e16  MOV RCX,qword ptr [RAX + 0x28]"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "invGetNum: one-past-last pointer on the node: 030e16  MOV RCX,qword ptr [RAX + 0x28]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: container 93: 22 well-formed slots; nothing worn"
     },
     "CONTAINER_NODE_NEXT": {
       "value": 56,
-      "status": "derived",
-      "evidence": "the chain walk advances through this field: 030d9b  MOV RAX,qword ptr [RAX + 0x38]"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "the chain walk advances through this field: 030d9b  MOV RAX,qword ptr [RAX + 0x38]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: container 93: 22 well-formed slots; nothing worn"
     },
     "REGISTRY_MAP": {
       "value": 51640,
       "status": "derived",
+      "kind": "field",
       "evidence": "npcCoord leaf hands the registry map (client+disp) to the lookup: 3ae4d3  LEA R8,[RBP + 0xc9b8]",
-      "previous": 51656
+      "previous": 51656,
+      "note": "CHANGED from a value verified on 241-1: review before merging"
     },
     "REGISTRY_GROUPS": {
       "value": 51672,
-      "status": "derived",
+      "status": "verified",
+      "kind": "field",
       "evidence": "getNpcIdAll leaf walks the group heads: 3ad4d6  MOV RDX,qword ptr [RAX + 0xc9d8]",
-      "previous": 51688
+      "previous": 51688,
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 2 handles PLAYER_IDS lists, yours included"
     },
     "REGISTRY_GROUP_COUNT": {
       "value": 51680,
-      "status": "derived",
+      "status": "verified",
+      "kind": "field",
       "evidence": "getNpcIdAll leaf bounds the walk: 3ad50d  MOV RAX,qword ptr [RAX + 0xc9e0]",
-      "previous": 51696
+      "previous": 51696,
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 2 handles PLAYER_IDS lists, yours included"
     },
     "REGISTRY_GROUP_SEL": {
       "value": 52304,
-      "status": "shifted",
-      "evidence": "not derived; the nearest derived client-object fields on both sides (0xcc5c and 0x895d8) both moved by -0x10, so this one was moved with them. Verify before trusting. not derived on 241-3; carried from 241-1: carried; the nearest derived client-object fields on both sides (0xcc5c, 0x895d8) did not move, so this one most likely did not either. not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): The group key naming the CURRENT group. DERIVED STATICALLY, not confirmed live -- our walk enumerates every group, so nothing in the shim reads it.  HOW FOUND (client-240-6): FUN_140078200 -- called from the frame function as (client, *(client+SCENE)) at 0x140073c51 -- is the group resolver: `movsxd r9,[rcx+0xCC60]` (this key), `div r8d` with the bucket count from [rdx+0xF0], walk the bucket heads",
+      "status": "derived",
+      "kind": "field",
+      "evidence": "the registry resolver keys the group lookup on it: 09d490  MOV EDX,dword ptr [RCX + 0xcc50]",
       "previous": 52320
     },
     "GROUP_TABLE": {
       "value": 16,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): field on a group node: the table pair"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "and returns the group's table pair: 0ec447  MOV RAX,qword ptr [RCX + 0x10]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 2 handles PLAYER_IDS lists, yours included"
     },
     "GROUP_NEXT": {
       "value": 24,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): field on a group node"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "registry group lookup (rva 0xec3d0) walks the chain: 0ec405  MOV RAX,qword ptr [RAX + 0x18]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 2 handles PLAYER_IDS lists, yours included"
     },
     "PLAYER_BUCKETS": {
       "value": 104,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): field on the table pair"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "player-table lookup rva 0xea980 (called with LOCAL_PLAYER_IDX by playerFindSelf's resolver): 0ea984  MOV R10,qword ptr [RCX + 0x68]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 2 handles PLAYER_IDS lists, yours included"
     },
     "PLAYER_BUCKET_COUNT": {
       "value": 112,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): field on the table pair (u64)"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "player-table lookup rva 0xea980 (called with LOCAL_PLAYER_IDX by playerFindSelf's resolver): 0ea980  MOV R8D,dword ptr [RCX + 0x70]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 2 handles PLAYER_IDS lists, yours included"
     },
     "NPC_BUCKETS": {
       "value": 152,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): field on the table pair"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "npcName's group walk rva 0x1878b0: 18794d  MOV R9,qword ptr [R8 + 0x98]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: the registry's NPC table holds exactly the 24 uids the scene lists"
     },
     "NPC_BUCKET_COUNT": {
       "value": 160,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): field on the table pair (u64)"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "npcName's group walk rva 0x1878b0: 187946  MOV ECX,dword ptr [R8 + 0xa0]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: the registry's NPC table holds exactly the 24 uids the scene lists"
     },
     "NODE_UID": {
       "value": 0,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): field on an entity node (u32)"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "player-table lookup rva 0xea980 (called with LOCAL_PLAYER_IDX by playerFindSelf's resolver) compares the uid with [node]: 0ea9a0  CMP R9D,dword ptr [RAX]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 2 handles PLAYER_IDS lists, yours included"
     },
     "NODE_ENTITY": {
       "value": 16,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): field on an entity node"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "player-table lookup rva 0xea980 (called with LOCAL_PLAYER_IDX by playerFindSelf's resolver) returns the entity: 0ea9bb  MOV RAX,qword ptr [RAX + 0x10]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 2 handles PLAYER_IDS lists, yours included"
     },
     "NODE_NEXT": {
       "value": 24,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): field on an entity node"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "player-table lookup rva 0xea980 (called with LOCAL_PLAYER_IDX by playerFindSelf's resolver) walks the bucket chain: 0ea9a5  MOV RAX,qword ptr [RAX + 0x18]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 2 handles PLAYER_IDS lists, yours included"
     },
     "SCENE_NPC_UIDS": {
       "value": 208,
-      "status": "derived",
-      "evidence": "getNpcIdAll leaf reads the uid array: 3ad560  MOV RAX,qword ptr [RBP + 0xd0]"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "getNpcIdAll leaf reads the uid array: 3ad560  MOV RAX,qword ptr [RBP + 0xd0]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: the registry's NPC table holds exactly the 24 uids the scene lists"
     },
     "SCENE_NPC_UID_COUNT": {
       "value": 216,
-      "status": "derived",
-      "evidence": "and its count: 3ad5a3  CMP ESI,dword ptr [RBP + 0xd8]"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "and its count: 3ad5a3  CMP ESI,dword ptr [RBP + 0xd8]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: the registry's NPC table holds exactly the 24 uids the scene lists"
     },
     "SCENE_BASE_X": {
       "value": 36,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): --------------------------------------------------------------------------------------------------- FIELDS ON THE SCENE OBJECT  ( *(clientObj + SCENE) ) --------------------------------------------------------------------------------------------------- The scene's south-west corner in WORLD tiles. Entities carry SCENE coordinates (0..103), so: worldX = SCENE_BASE_X + entity.sceneX  HOW FOUND (clie"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "7 scene->world conversions add it right after loading the scene pointer, e.g. 06939d  ADD R8D,dword ptr [RDX + 0x24]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: scene corner (3160,3168): in the world and chunk-aligned"
     },
     "SCENE_BASE_Y": {
       "value": 40,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): "
+      "status": "verified",
+      "kind": "field",
+      "evidence": "and this one alongside it, e.g. 0693a1  ADD R9D,dword ptr [RDX + 0x28]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: scene corner (3160,3168): in the world and chunk-aligned"
     },
     "ENTITY_SCENE_X": {
       "value": 1008,
-      "status": "derived",
-      "evidence": "npcCoord leaf reads it into the result's x slot: 3ae56d  MOV EAX,dword ptr [RSI + 0x3f0]"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "npcCoord leaf reads it into the result's x slot: 3ae56d  MOV EAX,dword ptr [RSI + 0x3f0]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 2 handles PLAYER_IDS lists, yours included"
     },
     "ENTITY_SCENE_Y": {
       "value": 1048,
-      "status": "derived",
-      "evidence": "npcCoord leaf reads it into the result's y slot: 3ae576  MOV EAX,dword ptr [RSI + 0x418]"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "npcCoord leaf reads it into the result's y slot: 3ae576  MOV EAX,dword ptr [RSI + 0x418]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: the registry's player table holds exactly the 2 handles PLAYER_IDS lists, yours included"
     },
     "ENTITY_FINE_H": {
       "value": 504,
-      "status": "derived",
-      "evidence": "dword both coordinate leaves read below the scene coords: the render height (fine x/y follow at +4/+8)"
+      "status": "carried",
+      "kind": "field",
+      "since": "241-1",
+      "since_status": "derived",
+      "evidence": "not derived on 241-3; value last derived on 241-1: dword both coordinate leaves read below the scene coords: the render height (fine x/y follow at +4/+8)",
+      "plausible": "self-check 2026-10-09: ground height -464"
     },
     "ENTITY_FINE_X": {
-      "value": 508,
-      "status": "derived",
-      "evidence": "render position triple {height, x, y}: +4"
+      "value": 616,
+      "status": "verified",
+      "kind": "field",
+      "evidence": "npcCoordFine reads x through the entity's coordinate object: 3ae7cd  LEA RCX,[RBP + 0x260] then a getter of +0x8",
+      "previous": 508,
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: render position (7088,5568) sits on scene tile (55,44)"
     },
     "ENTITY_FINE_Y": {
-      "value": 512,
-      "status": "derived",
-      "evidence": "render position triple {height, x, y}: +8"
+      "value": 620,
+      "status": "verified",
+      "kind": "field",
+      "evidence": "and y: 3ae7d9  LEA RCX,[RBP + 0x260] then a getter of +0xc",
+      "previous": 512,
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: render position (7088,5568) sits on scene tile (55,44)"
     },
     "ENTITY_PLANE": {
       "value": 1056,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): SUSPECT: this build points at 0x7CC instead"
+      "status": "suspect",
+      "kind": "field",
+      "since": "240-6",
+      "since_status": "suspect",
+      "evidence": "not derived on 241-3; value last suspect on 240-6: compiled default (client/offsets.hpp): SUSPECT: this build points at 0x7CC instead",
+      "inference": "the nearest derived entity fields on both sides (0x418, 0x710) did not move, so this one most likely did not either",
+      "verification": "FAILED self-check 2026-10-09: read 44"
     },
     "ENTITY_PLANE_COORD": {
       "value": 1944,
       "status": "derived",
-      "evidence": "the one dword the coord leaf reads off the entity that npcCoord does not (its level)"
+      "kind": "field",
+      "evidence": "the one dword the coord leaf reads off the entity that npcCoord does not (its level)",
+      "plausible": "self-check 2026-10-09: read 0"
     },
     "ENTITY_DEF_PTR": {
       "value": 1840,
-      "status": "derived",
-      "evidence": "npcName's resolver loads the definition: 0a00ee  MOV RDX,qword ptr [RSI + 0x730]"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "npcName's resolver loads the definition: 0a00ee  MOV RDX,qword ptr [RSI + 0x730]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: 23 of 24 NPCs have a readable name (Man, Rat, Giant rat, Rat, Rat, Rat, Rat, Frog, Rat, Rat, Hans)"
     },
     "ENTITY_NAME_OVERRIDE": {
       "value": 1808,
       "status": "verified",
-      "evidence": "npcName's resolver checks the inline override: 09fffb  LEA RDX,[RSI + 0x710]"
+      "kind": "field",
+      "evidence": "npcName's resolver checks the inline override: 09fffb  LEA RDX,[RSI + 0x710]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: 23 of 24 NPCs have a readable name (Man, Rat, Giant rat, Rat, Rat, Rat, Rat, Frog, Rat, Rat, Hans)"
     },
     "PLAYER_NAME_PTR": {
       "value": 1816,
-      "status": "derived",
-      "evidence": "playerName leaf: 1ecc37  MOV RCX,qword ptr [RCX + 0x718]"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "playerName leaf: 1ecc37  MOV RCX,qword ptr [RCX + 0x718]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: your name reads \"DapperSam\""
     },
     "DEF_NAME": {
       "value": 8,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): NxtString on the NPC definition"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "npcName's resolver takes the definition's name string: 0a00ee  MOV RDX,qword ptr [RSI + 0x730]; 0a00f5  ADD RDX,0x8",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: 23 of 24 NPCs have a readable name (Man, Rat, Giant rat, Rat, Rat, Rat, Rat, Frog, Rat, Rat, Hans)"
     },
     "IFACE_MANAGER": {
-      "value": 4275176,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): on the client object"
+      "value": 4275160,
+      "status": "verified",
+      "kind": "field",
+      "evidence": "one-instruction getter 084e30  MOV RAX,qword ptr [RCX + 0x413bd8] whose result is passed to the widget lookup at rva 0x5af750",
+      "previous": 4275176,
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: 38 of 973 groups loaded, 1998 components"
     },
     "IFACE_GROUP_COUNT": {
-      "value": 26112,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): u64, on the interface manager"
+      "value": 26760,
+      "status": "verified",
+      "kind": "field",
+      "evidence": "widget lookup bounds the group id: 5af76d  CMP RAX,qword ptr [RCX + 0x6888]",
+      "previous": 26112,
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: 38 of 973 groups loaded, 1998 components"
     },
     "IFACE_GROUP_ARRAY": {
-      "value": 26120,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): -> 24-byte group entries"
+      "value": 26768,
+      "status": "verified",
+      "kind": "field",
+      "evidence": "widget lookup indexes the group array: 5af77d  MOV RAX,qword ptr [RCX + 0x6890]",
+      "previous": 26120,
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: 38 of 973 groups loaded, 1998 components"
     },
     "IFACE_GROUP_ENTRY_STRIDE": {
       "value": 24,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): bytes per group entry"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "widget lookup scales the group index by 3 then 8: 5af776  LEA RDX,[RAX + RAX*0x2]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: 38 of 973 groups loaded, 1998 components"
     },
     "IFACE_GROUP_ENTRY_COUNT": {
       "value": 8,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): in the entry: u64 componentCount"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "widget lookup bounds the component index: 5af788  MOV RAX,qword ptr [RAX + RDX*0x8 + 0x8]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: 38 of 973 groups loaded, 1998 components"
     },
     "IFACE_GROUP_ENTRY_DATA": {
       "value": 16,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): in the entry: -> componentData"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "widget lookup reads the component array: 5af797  MOV RAX,qword ptr [RDI + 0x10]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: 38 of 973 groups loaded, 1998 components"
     },
     "IFACE_EMPTY_SENTINEL": {
-      "value": 22398448,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): global; compare entry+8's"
+      "value": 22406632,
+      "status": "derived",
+      "kind": "global",
+      "evidence": "widget lookup returns this static empty object on a miss: 5af7d7  LEA RAX,[0x14155e5e8]",
+      "previous": 22398448,
+      "plausible": "self-check 2026-10-09: 0 component slots hold the shared empty object"
     },
     "IFTYPE_X": {
       "value": 92,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): int, relative to the parent"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "the two unbound ints between the bound dataHeight (0x58) and width (0x64): the laid-out rect {x, y, width, height}",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: 2 components sit at (0,0) at the canvas size 1298x861; largest seen: (0,0 154x12801) (0,0 154x12801) (0,0 150x7530)"
     },
     "IFTYPE_Y": {
       "value": 96,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): "
+      "status": "verified",
+      "kind": "field",
+      "evidence": "x + 4 in the same rect (see IFTYPE_X)",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: 2 components sit at (0,0) at the canvas size 1298x861; largest seen: (0,0 154x12801) (0,0 154x12801) (0,0 150x7530)"
     },
     "IFTYPE_WIDTH": {
       "value": 100,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): "
+      "status": "verified",
+      "kind": "field",
+      "evidence": "IfType registration rva 0x225f10 binds \"width\" to this offset (226b91)",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: 2 components sit at (0,0) at the canvas size 1298x861; largest seen: (0,0 154x12801) (0,0 154x12801) (0,0 150x7530)"
     },
     "IFTYPE_HEIGHT": {
       "value": 104,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): "
+      "status": "verified",
+      "kind": "field",
+      "evidence": "IfType registration rva 0x225f10 binds \"height\" to this offset (226bb8)",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: 2 components sit at (0,0) at the canvas size 1298x861; largest seen: (0,0 154x12801) (0,0 154x12801) (0,0 150x7530)"
     },
     "IFTYPE_HIDDEN": {
       "value": 120,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): bool"
+      "status": "derived",
+      "kind": "field",
+      "evidence": "IfType registration rva 0x225f10 binds \"hidden\" to this offset (226bdf)",
+      "plausible": "self-check 2026-10-09: 1998 of 1998 hidden flags are 0/1"
     },
     "IFTYPE_CHILDREN_COUNT": {
       "value": 2896,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): u64"
+      "status": "derived",
+      "kind": "field",
+      "evidence": "child lookup (rva 0x5af860, calls the widget lookup) bounds the child index: 5af87e  CMP RBX,qword ptr [RCX + 0xb50]"
     },
     "IFTYPE_CHILDREN_DATA": {
       "value": 2904,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): -> 16-byte shared_ptr entries"
+      "status": "derived",
+      "kind": "field",
+      "evidence": "and adds the child array: 5af88b  ADD RAX,qword ptr [RCX + 0xb58]"
     },
     "IFTYPE_TEXT": {
       "value": 344,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): inline-or-char* string; flag:"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "the \"text\" property's getter lambda after the IfType registration: 2281b0  MOVZX EAX,byte ptr [RCX + 0x16f]",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: 112 components carry readable text"
     },
     "IFTYPE_TEXT_FLAG": {
       "value": 367,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): bit7 = heap, SSO len = 0x17-flag"
+      "status": "verified",
+      "kind": "field",
+      "evidence": "the same getter tests bit 7 of this byte (the NxtString heap flag)",
+      "verified_on": "2026-10-09",
+      "verification": "self-check 2026-10-09: 112 components carry readable text"
     },
     "IFTYPE_TEXT2": {
       "value": 368,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): "
+      "status": "derived",
+      "kind": "field",
+      "evidence": "the \"text2\" property's getter lambda: 228200  MOVZX EAX,byte ptr [RCX + 0x187]"
     },
     "IFTYPE_TEXT2_FLAG": {
       "value": 391,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): "
+      "status": "derived",
+      "kind": "field",
+      "evidence": "the same getter tests bit 7 of this byte"
     },
     "IFTYPE_SCAN_SPAN": {
       "value": 1024,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): struct prefix the tally reads per component"
+      "status": "constant",
+      "kind": "constant",
+      "evidence": "chosen by 0xClient (client/offsets.hpp), not a number read from the game"
     },
     "IFTYPE_CHAIN_MAX": {
       "value": 16,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): depth cap on any parent walk"
+      "status": "constant",
+      "kind": "constant",
+      "evidence": "chosen by 0xClient (client/offsets.hpp), not a number read from the game"
     },
     "ENTITY_ANIMATION": {
       "value": 1240,
       "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): current animation id, -1 when idle"
+      "kind": "field",
+      "since": "240-6",
+      "since_status": "verified",
+      "evidence": "not derived on 241-3; value last verified on 240-6: compiled default (client/offsets.hpp): current animation id, -1 when idle",
+      "inference": "the nearest derived entity fields on both sides (0x418, 0x710) did not move, so this one most likely did not either",
+      "plausible": "self-check 2026-10-09: 26 of 26 entities -1 or a sequence id"
     },
     "ENTITY_ORIENTATION": {
       "value": 992,
       "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): 0..2047, 0 = south, rising clockwise"
+      "kind": "field",
+      "since": "240-6",
+      "since_status": "default",
+      "evidence": "not derived on 241-3; value last default on 240-6: compiled default (client/offsets.hpp): 0..2047, 0 = south, rising clockwise",
+      "plausible": "self-check 2026-10-09: 26 of 26 entities in 0..2047, 23 nonzero"
     },
     "PLAYER_COMBAT_LEVEL": {
       "value": 1844,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): Combat level, on a PLAYER entity. NPCs keep theirs on the shared definition instead -- reading this on an NPC live returned a pointer fragment (the high half of a heap address), never a level. On the local player it read -1, so this offset is simply WRONG on client-240-6. NOT VERIFIED -- re-derive from the client's combat-level Lua binding before trusting any number that comes out of here."
+      "status": "suspect",
+      "kind": "field",
+      "since": "240-6",
+      "since_status": "default",
+      "evidence": "not derived on 241-3; value last default on 240-6: compiled default (client/offsets.hpp): Combat level, on a PLAYER entity. NPCs keep theirs on the shared definition instead -- reading this on an NPC live returned a pointer fragment (the high half of a heap address), never a level. On the local player it read -1, so this offset is simply WRONG on client-240-6. NOT VERIFIED -- re-derive from the client's combat-level Lua binding before trusting any number that comes out of here.",
+      "inference": "the nearest derived entity fields on both sides (0x730, 0x798) did not move, so this one most likely did not either",
+      "verification": "FAILED self-check 2026-10-09: read -1, your stats make 3"
     },
     "LOGIN_PASSWORD_DELTA": {
       "value": 508,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): --------------------------------------------------------------------------------------------------- THE LOGIN FORM'S FIELDS -- NOT VERIFIED --------------------------------------------------------------------------------------------------- Distance from the client's username buffer to its password buffer, so the autologin plugin can SET the two fields instead of typing them at a form whose focus i"
+      "status": "refuted",
+      "kind": "field",
+      "since": "240-6",
+      "since_status": "refuted",
+      "evidence": "not derived on 241-3; value last refuted on 240-6: compiled default (client/offsets.hpp): --------------------------------------------------------------------------------------------------- THE LOGIN FORM'S FIELDS -- NOT VERIFIED --------------------------------------------------------------------------------------------------- Distance from the client's username buffer to its password buffer, so the autologin plugin can SET the two fields instead of typing them at a form whose focus i"
     },
     "OPLOC1": {
       "value": 3,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): scenery, first option: Chop down / Mine / Open / Climb..."
+      "status": "constant",
+      "kind": "constant",
+      "evidence": "chosen by 0xClient (client/offsets.hpp), not a number read from the game"
     },
     "OPNPC1": {
       "value": 9,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): NPC options one through five. Attack is normally the first, but not always -- Talk-to is first on a shopkeeper -- so a bot that always sends OPNPC1 will happily talk to a cow."
+      "status": "constant",
+      "kind": "constant",
+      "evidence": "chosen by 0xClient (client/offsets.hpp), not a number read from the game"
     },
     "OPNPC2": {
       "value": 10,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): "
+      "status": "constant",
+      "kind": "constant",
+      "evidence": "chosen by 0xClient (client/offsets.hpp), not a number read from the game"
     },
     "OPNPC3": {
       "value": 11,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): "
+      "status": "constant",
+      "kind": "constant",
+      "evidence": "chosen by 0xClient (client/offsets.hpp), not a number read from the game"
     },
     "OPNPC4": {
       "value": 12,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): "
+      "status": "constant",
+      "kind": "constant",
+      "evidence": "chosen by 0xClient (client/offsets.hpp), not a number read from the game"
     },
     "OPNPC5": {
       "value": 13,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): "
+      "status": "constant",
+      "kind": "constant",
+      "evidence": "chosen by 0xClient (client/offsets.hpp), not a number read from the game"
     },
     "OP_WALK": {
       "value": 31,
-      "status": "carried",
-      "evidence": "not derived on 241-3; carried from 241-1: not derived on 241-1; carried from 240-6: compiled default (client/offsets.hpp): Walk to a tile. THIRTY-ONE, not twenty-three.  There is a neighbouring opcode that also looks like a walk and is not: it scales the coordinates you give it through the viewport ratio before storing them, so feeding it scene tiles walks you to a place that has nothing to do with where you asked. This one takes scene tiles directly. If your character walks somewhere baffling, this is the first thing"
+      "status": "constant",
+      "kind": "constant",
+      "evidence": "chosen by 0xClient (client/offsets.hpp), not a number read from the game"
     }
   }
 }

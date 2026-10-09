@@ -172,71 +172,198 @@ def header_notes():
     return notes
 
 
-# Fields that are displacements on the client object. When a build inserts or removes bytes in that
-# object, every field past the edit moves by the same amount. A carried field whose nearest DERIVED
-# neighbours on both sides moved by the same delta is moved by that delta too, and labelled "shifted"
-# rather than "carried" -- still not a measurement, but an inference with a stated basis.
-CLIENT_OBJECT_FIELDS = {
-    "VIEW_OBJ", "PENDING_ACTION_PACKED_ID", "PENDING_ACTION_INDEX", "PENDING_ACTION_TARGET",
-    "PENDING_ACTION_SEQ", "PENDING_ACTION_PENDING", "GAME_STATE", "CYCLE", "SKILL_EFFECTIVE",
-    "SKILL_BASE", "SKILL_XP", "RUN_ENERGY", "WORLD_MAP", "CAMERA_FINE_X", "CAMERA_FINE_H",
-    "CAMERA_FINE_Y", "REGISTRY_MAP", "REGISTRY_GROUPS", "REGISTRY_GROUP_COUNT", "SCENE",
-    "LOCAL_PLAYER_IDX", "REGISTRY_GROUP_SEL", "PLAYER_COUNT", "PLAYER_IDS", "IFACE_MANAGER",
+# Struct FAMILIES: displacements that live in the same object. When a build inserts or removes bytes
+# in that object, every field past the edit moves by the same amount, so a carried field whose nearest
+# DERIVED neighbours in its own family moved by the same delta on BOTH sides is moved by that delta too,
+# and labelled "shifted" rather than "carried" -- still not a measurement, but an inference with a
+# stated basis that the DLL's self-check then confirms or refutes. Fields of different objects must
+# never be mixed: a delta measured on the client object says nothing about an entity.
+FAMILIES = {
+    "client object": {
+        "VIEW_OBJ", "GAME_STATE", "CYCLE", "SKILL_EFFECTIVE", "SKILL_BASE", "SKILL_XP", "RUN_ENERGY",
+        "WORLD_MAP", "CAMERA_FINE_X", "CAMERA_FINE_H", "CAMERA_FINE_Y", "REGISTRY_MAP", "REGISTRY_GROUPS",
+        "REGISTRY_GROUP_COUNT", "SCENE", "LOCAL_PLAYER_IDX", "REGISTRY_GROUP_SEL", "PLAYER_COUNT", "PLAYER_IDS",
+        "IFACE_MANAGER",
+    },
+    "entity": {
+        "ENTITY_FINE_H", "ENTITY_FINE_X", "ENTITY_FINE_Y", "ENTITY_ORIENTATION", "ENTITY_SCENE_X", "ENTITY_SCENE_Y",
+        "ENTITY_PLANE", "ENTITY_ANIMATION", "ENTITY_NAME_OVERRIDE", "PLAYER_NAME_PTR", "ENTITY_DEF_PTR",
+        "PLAYER_COMBAT_LEVEL", "ENTITY_PLANE_COORD",
+    },
+    "IfType": {
+        "IFTYPE_X", "IFTYPE_Y", "IFTYPE_WIDTH", "IFTYPE_HEIGHT", "IFTYPE_HIDDEN", "IFTYPE_TEXT", "IFTYPE_TEXT_FLAG",
+        "IFTYPE_TEXT2", "IFTYPE_TEXT2_FLAG", "IFTYPE_CHILDREN_COUNT", "IFTYPE_CHILDREN_DATA",
+    },
 }
+# kept for anything that imported the old name
+CLIENT_OBJECT_FIELDS = FAMILIES["client object"]
 
 
 def infer_shifts(offsets, prev_offsets):
-    derived = sorted((p["value"], offsets[n]["value"] - p["value"]) for n, p in prev_offsets.items()
-                     if n in CLIENT_OBJECT_FIELDS and n in offsets and offsets[n]["status"] in ("derived", "verified")
-                     and isinstance(p.get("value"), int))
-    for name, entry in offsets.items():
-        if name not in CLIENT_OBJECT_FIELDS or entry["status"] != "carried":
+    for family, members in FAMILIES.items():
+        derived = sorted((p["value"], offsets[n]["value"] - p["value"]) for n, p in prev_offsets.items()
+                         if n in members and n in offsets and offsets[n]["status"] in ("derived", "verified")
+                         and isinstance(p.get("value"), int))
+        for name, entry in offsets.items():
+            if name not in members or entry["status"] not in ("carried", "suspect"):
+                continue
+            old = entry["value"]
+            below = [(v, d) for v, d in derived if v < old]
+            above = [(v, d) for v, d in derived if v > old]
+            if not below or not above:
+                continue
+            lo, hi = below[-1], above[0]
+            if lo[1] != hi[1]:
+                continue
+            if lo[1] == 0:
+                entry["inference"] = (f"the nearest derived {family} fields on both sides (0x{lo[0]:x}, 0x{hi[0]:x}) "
+                                      f"did not move, so this one most likely did not either")
+                continue
+            entry["previous"] = old
+            entry["value"] = old + lo[1]
+            if entry["status"] == "carried":
+                entry["status"] = "shifted"   # a suspect value stays suspect: it moved, it did not improve
+            entry["inference"] = (f"not derived; the nearest derived {family} fields on both sides (0x{lo[0]:x} and "
+                                  f"0x{hi[0]:x}) both moved by {lo[1]:+#x}, so this one was moved with them. Verify before trusting")
+
+# What KIND of number each entry is. The kind decides how dangerous a value that was not measured on
+# this build is, and the DLL (client/offsets_json.hpp) applies exactly this rule:
+#
+#   code      an RVA the DLL CALLS. Moves on every build; a stale one crashes the game. Never applied
+#             unless derived or verified on this build.
+#   global    an RVA of a data cell the DLL reads. Moves on every build; a stale one reads garbage.
+#             Never applied unless derived or verified on this build.
+#   field     a displacement inside a struct. Moves rarely; a carried one is applied but labelled, and
+#             the DLL's self-check is what confirms or condemns it.
+#   opcode    a menu action number. Only a hook-and-log against a real click establishes it.
+#   constant  a number 0xClient chooses (a scan span, a depth cap). Not read from the game at all, so
+#             "carried" would be a lie: it is labelled "constant" and never reviewed as an offset.
+CODE_RVAS = {"BUILD_ID", "DO_ACTION", "WORLD_TO_SCREEN", "GET_VARBIT", "ACT_TICK", "ACT_WALK", "ACT_NPC_OP", "ACT_LOC_OP"}
+GLOBAL_RVAS = {"CLIENT_OBJ_PTR", "VARP_ARRAY_PTR", "CONTAINER_BUCKETS", "CONTAINER_MASK", "IFACE_EMPTY_SENTINEL"}
+OPCODES = set()   # since client-241-3 the OP_* numbers are 0xClient's own labels (client/actions.hpp)
+CONSTANTS = {"IFTYPE_SCAN_SPAN", "IFTYPE_CHAIN_MAX", "OPLOC1", "OPNPC1", "OPNPC2", "OPNPC3", "OPNPC4", "OPNPC5", "OP_WALK"}
+
+
+def kind_of(name):
+    if name in CODE_RVAS:
+        return "code"
+    if name in GLOBAL_RVAS:
+        return "global"
+    if name in OPCODES:
+        return "opcode"
+    if name in CONSTANTS:
+        return "constant"
+    return "field"
+
+
+MEASURED = ("derived", "verified")
+# statuses a carried value keeps, so a doubt recorded on one build is not laundered into "carried"
+DOUBTS = ("suspect", "refuted")
+_CARRY_PREFIX = re.compile(r"^(?:(?:not derived on [\w-]+; (?:carried|value last \w+) (?:from|on) [\w-]+: )|(?:(?:carried|not derived); the nearest derived [\w -]*?fields[^.]*\.(?: [^.]*?(?:either|them)\.)?(?: Verify before trusting\.)? ))+")
+
+
+def origin_evidence(entry):
+    """The evidence a value was ORIGINALLY recorded with, without the 'carried from' chain earlier
+    builds wrapped around it (old files nest one prefix per build)."""
+    return _CARRY_PREFIX.sub("", str(entry.get("evidence", "")))
+
+
+def keep_verified(build, sha, offsets):
+    """Re-deriving a build that already has a file must not throw away what the running game confirmed:
+    an entry the existing file (same build, same binary) records as verified -- or as FAILED in game --
+    and that came out with the same value now, keeps that status with its date and evidence. A changed
+    value is not carried over: it is a different number, and nothing has been seen about it yet."""
+    path = os.path.join(OFFSETS_DIR, f"client-{build}.json")
+    try:
+        old = json.load(open(path, encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if old.get("sha256") != sha:
+        return
+    for name, e in old.get("offsets", {}).items():
+        cur = offsets.get(name)
+        if not cur or e.get("value") != cur.get("value"):
             continue
-        old = entry["value"]
-        below = [(v, d) for v, d in derived if v < old]
-        above = [(v, d) for v, d in derived if v > old]
-        if not below or not above:
+        failed = e.get("status") == "suspect" and str(e.get("verification", "")).startswith("FAILED")
+        if e.get("status") != "verified" and not failed:
             continue
-        lo, hi = below[-1], above[0]
-        if lo[1] != hi[1]:
-            continue
-        if lo[1] == 0:
-            entry["evidence"] = (f"carried; the nearest derived client-object fields on both sides "
-                                 f"(0x{lo[0]:x}, 0x{hi[0]:x}) did not move, so this one most likely did not either. " + entry["evidence"])
-            continue
-        entry["previous"] = old
-        entry["value"] = old + lo[1]
-        entry["status"] = "shifted"
-        entry["evidence"] = (f"not derived; the nearest derived client-object fields on both sides "
-                             f"(0x{lo[0]:x} and 0x{hi[0]:x}) both moved by {lo[1]:+#x}, so this one was moved with them. "
-                             f"Verify before trusting. " + entry["evidence"])
+        cur["status"] = "suspect" if failed else "verified"
+        for k in ("verified_on", "verification"):
+            if k in e:
+                cur[k] = e[k]
+        for k in ("since", "since_status", "inference"):
+            cur.pop(k, None)
+
+
+def _status_in(build, name):
+    """The status `name` has in offsets/client-<build>.json, if that file exists."""
+    path = os.path.join(OFFSETS_DIR, f"client-{build}.json")
+    try:
+        return json.load(open(path, encoding="utf-8"))["offsets"][name]["status"]
+    except (OSError, KeyError, ValueError):
+        return None
+
+
+def _int(s):
+    try:
+        return int(s, 0)
+    except ValueError:
+        return None
 
 
 def merge(build, sha, derived, prev):
     keys = table_keys()
+    notes = header_notes()
     prev_offsets = (prev or {}).get("offsets", {})
+    prev_build = (prev or {}).get("build")
     offsets = {}
     for k in keys:
         name = k["name"]
+        kind = kind_of(name)
         d = derived.get("offsets", {}).get(name)
         p = prev_offsets.get(name)
+        if kind == "constant":
+            offsets[name] = {"value": int(k["default"], 0), "status": "constant", "kind": kind,
+                             "evidence": "chosen by 0xClient (client/offsets.hpp), not a number read from the game"}
+            continue
         if d and d.get("value") is not None:
             status = "derived"
             if p and p.get("value") == d["value"] and p.get("status") == "verified":
                 status = "verified"
-            offsets[name] = {"value": d["value"], "status": status, "evidence": d.get("evidence", "")}
+            offsets[name] = {"value": d["value"], "status": status, "kind": kind, "evidence": d.get("evidence", "")}
             if p and p.get("value") != d["value"]:
                 offsets[name]["previous"] = p.get("value")
+                if p.get("status") == "verified":
+                    offsets[name]["note"] = f"CHANGED from a value verified on {prev_build}: review before merging"
+            if status == "verified" and p.get("verified_on"):
+                offsets[name]["verified_on"] = p["verified_on"]
         elif p and p.get("value") is not None:
-            offsets[name] = {"value": p["value"], "status": "carried",
-                             "evidence": f"not derived on {build}; carried from {prev.get('build')}: " + str(p.get("evidence", ""))}
+            # Record WHERE the value was last measured, not a growing chain of "carried from" hops.
+            if p.get("status") in MEASURED:
+                since, since_status = prev_build, p["status"]
+            elif p.get("since"):
+                since, since_status = p["since"], p.get("since_status", "carried")
+            else:
+                # an older file: the origin is the last hop of its "carried from" chain
+                hops = re.findall(r"carried from ([\w-]+)", str(p.get("evidence", "")))
+                since = hops[-1] if hops else prev_build
+                since_status = _status_in(since, name) or p.get("status")
+            status = p["status"] if p.get("status") in DOUBTS else "carried"
+            # A doubt the compiled default's own note records (SUSPECT / REFUTED in offsets.hpp) still
+            # applies while the carried value IS that default -- older files lost it on the first carry.
+            hn = notes.get(name)
+            if hn and hn[0] in DOUBTS and str(p["value"]) == str(_int(k["default"])):
+                status = hn[0]
+            offsets[name] = {"value": p["value"], "status": status, "kind": kind,
+                             "since": since, "since_status": since_status,
+                             "evidence": f"not derived on {build}; value last {since_status} on {since}: " + origin_evidence(p)}
         else:
             default = k["default"]
             try:
                 val = int(default, 0)
             except ValueError:
                 val = None
-            offsets[name] = {"value": val, "status": "missing" if val is None else "default",
+            offsets[name] = {"value": val, "status": "missing" if val is None else "default", "kind": kind,
                              "evidence": "no derivation and no previous build; compiled default"}
     if not prev:
         # First baseline: the compiled defaults' own notes say what was confirmed against a running
@@ -245,6 +372,8 @@ def merge(build, sha, derived, prev):
             e = offsets.get(name)
             if not e:
                 continue
+            if e["status"] == "constant":
+                continue
             if e["status"] == "default":
                 e["status"] = status
                 e["evidence"] = "compiled default (client/offsets.hpp): " + note
@@ -252,6 +381,7 @@ def merge(build, sha, derived, prev):
                 e["status"] = "verified"
                 e["evidence"] += " | confirmed against a running game on this build (client/offsets.hpp)"
     infer_shifts(offsets, prev_offsets)
+    keep_verified(build, sha, offsets)
     return {
         "build": build,
         "sha256": sha,
@@ -272,6 +402,53 @@ def diff(prev, cur):
     return rows
 
 
+def summary(cur, prev, prev_path, changes):
+    """The reviewer's page: what was measured, what was not and why that matters, what moved."""
+    o = cur["offsets"]
+    counts = {}
+    for v in o.values():
+        counts[v["status"]] = counts.get(v["status"], 0) + 1
+    lines = [f"## Offsets for client-{cur['build']}", "",
+             f"`osclient.exe` sha256 `{cur['sha256']}`", "",
+             "| status | count |", "|---|---:|"]
+    for s in ("verified", "derived", "shifted", "carried", "suspect", "refuted", "default", "missing", "constant"):
+        if counts.get(s):
+            lines.append(f"| {s} | {counts[s]} |")
+    po = (prev or {}).get("offsets", {})
+    lost = [n for n, v in o.items() if v["status"] not in MEASURED and po.get(n, {}).get("status") in MEASURED]
+    if lost:
+        lines += ["", "### REGRESSION: derived on the previous build, not on this one",
+                  "A rule in tools/ghidra_scripts/DeriveOffsets.java stopped matching -- the build changed a shape "
+                  "it depends on. Read build/ghidra-<build>/derived.json.debug.txt and the notes, fix the rule:", ""]
+        lines += [f"- `{n}` (now {o[n]['status']})" for n in lost]
+        notes = cur.get("notes")
+        if notes:
+            lines += ["", f"derivation notes: {notes}"]
+    danger = [n for n, v in o.items() if v.get("kind") in ("code", "global") and v["status"] not in MEASURED]
+    if danger:
+        lines += ["", "### Not applied by the DLL on this build",
+                  "Function and global RVAs move on every build, so a value not measured on this one is "
+                  "refused rather than called or read. Features that need these stay off until they are derived:", ""]
+        lines += [f"- `{n}` ({o[n]['kind']}, {o[n]['status']})" for n in danger]
+    review = [n for n, v in o.items() if v.get("note")]
+    if review:
+        lines += ["", "### Changed from a verified value -- check these first", ""]
+        lines += [f"- `{n}`: {o[n].get('previous')} -> {o[n]['value']}" for n in review]
+    soft = [n for n, v in o.items() if v.get("kind") == "field" and v["status"] not in MEASURED]
+    if soft:
+        lines += ["", f"### Struct fields carried or inferred ({len(soft)})",
+                  "Applied, labelled, and checked by the DLL's self-check (`OXC_SELFCHECK=1`) on first run:", ""]
+        lines += ["- " + ", ".join(f"`{n}`" for n in soft)]
+    if prev:
+        lines += ["", f"### Diff against {os.path.basename(prev_path)} ({len(changes)} changed)", ""]
+        if changes:
+            lines += ["| name | old | new | status |", "|---|---|---|---|"]
+            for name, pv, nv, st in changes:
+                f = lambda x: hex(x) if isinstance(x, int) else str(x)
+                lines.append(f"| `{name}` | {f(pv)} | {f(nv)} | {st} |")
+    return "\n".join(lines) + "\n"
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     src = ap.add_mutually_exclusive_group(required=True)
@@ -282,6 +459,7 @@ def main():
     ap.add_argument("--projects", default=os.path.join(ROOT, "build"), help="where Ghidra projects live")
     ap.add_argument("--no-analyse", action="store_true", help="reuse build/ghidra-<build>/derived.json")
     ap.add_argument("--dry-run", action="store_true", help="print the file instead of writing it")
+    ap.add_argument("--summary", help="also write a Markdown review summary here (the CI pull request body)")
     a = ap.parse_args()
 
     if a.exe:
@@ -316,6 +494,9 @@ def main():
         log(f"changes against {os.path.basename(prev_path)}: {len(changes)}")
         for name, pv, nv, st in changes:
             log(f"  {name:28s} {hex(pv) if isinstance(pv, int) else pv} -> {hex(nv) if isinstance(nv, int) else nv}  [{st}]")
+    if a.summary:
+        with open(a.summary, "w", encoding="utf-8", newline="\n") as f:
+            f.write(summary(cur, prev, prev_path, changes))
     text = json.dumps(cur, indent=2)
     if a.dry_run:
         print(text)
