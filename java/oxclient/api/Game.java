@@ -60,7 +60,7 @@ public final class Game {
         wasReady = nowReady;
 
         int[] flat = Natives.entities();
-        final int stride = 10;                          // see nEntities in client/jvm.hpp
+        final int stride = 11;                          // see nEntities in client/jvm.hpp
         List<Entity> all = new ArrayList<>(flat.length / stride);
         List<Entity> n = new ArrayList<>();
         List<Entity> p = new ArrayList<>();
@@ -72,7 +72,7 @@ public final class Game {
             if (uid == me && flat[i + 3] != 0) continue;
             Entity e = new Entity(uid, flat[i + 1], flat[i + 2], flat[i + 3] != 0,
                                   flat[i + 4], flat[i + 5], flat[i + 6],
-                                  flat[i + 7], flat[i + 8], flat[i + 9]);
+                                  flat[i + 7], flat[i + 8], flat[i + 9], flat[i + 10]);
             all.add(e);
             (e.isPlayer() ? p : n).add(e);
         }

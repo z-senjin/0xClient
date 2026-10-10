@@ -40,6 +40,7 @@
 #include "offsets_json.hpp"
 #include "selfcheck.hpp"
 #include "actionprobe.hpp"
+#include "combatprobe.hpp"
 
 namespace {
 
@@ -901,6 +902,10 @@ DWORD WINAPI run(LPVOID module) {
             // (client/actionprobe.hpp). Read-only; prints [probe] lines to the OXC_LOG file.
             static oxc::probe::Probe actionProbe;
             actionProbe.tick();
+            // OXC_COMBATPROBE=1 only: looks for the "who is this actor fighting" fields while you fight
+            // (client/combatprobe.hpp). Read-only; prints [combat] lines to the OXC_LOG file.
+            static oxc::combatprobe::Probe combatProbe;
+            combatProbe.tick();
             // Queued menu actions run on the game thread from the tick breakpoint (client/actions.hpp);
             // this arms it once and logs what was sent. hwbp::tick re-arms new game threads.
             oxc::actions::tick();

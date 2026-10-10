@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <array>
 #include "offsets.hpp"
 #include "log.hpp"
 
@@ -84,6 +85,7 @@ struct Entity {
     int            plane = 0;
     int            animation = -1;
     int            orientation = 0;
+    int            target = -1;     // uid of whoever it is fighting (offsets.hpp ENTITY_TARGET), -1 for none
     // Which of the registry's two tables this node came out of (offsets.hpp: +0x68 players, +0x98
     // NPCs). Player handles and NPC uids are separate keyspaces -- the client resolves PLAYER_IDS
     // only against the player table and scene+0xD0 only against the NPC table -- so a uid alone
@@ -182,6 +184,7 @@ void forEachEntity(F&& cb) {
                           : (p420 >= 0 && p420 <= 3) ? p420 : -1;
                 ent.animation   = rd<std::int32_t>(e + off::ENTITY_ANIMATION, -1);
                 ent.orientation = rd<std::int32_t>(e + off::ENTITY_ORIENTATION);
+                ent.target      = rd<std::int32_t>(e + off::ENTITY_TARGET, -1);
                 ent.player      = players;      // known from which table we are in, not from the uid
                 cb(ent);
             }
@@ -451,6 +454,56 @@ struct WidgetTreeScan {
     std::string report;      // printed once by the probe native; the counts, not just the verdict
     bool usable() const { return parentIdOff >= 0 || parentPtrOff >= 0; }
 };
+
+/// The newest IFTYPE_LAST_PROCESS over one group's components, and over every loaded group (cached for 100 ms:
+/// Java asks this many times a frame). {group, newest}; group is -1 when the group is not loaded.
+inline std::array<int, 2> groupProcessed(int group) {
+    static DWORD at = 0;
+    static std::vector<int> perGroup;
+    static int newest = -1;
+    const DWORD now = GetTickCount();
+    if (now - at > 100 || perGroup.empty()) {
+        at = now;
+        perGroup.clear();
+        newest = -1;
+        const std::uintptr_t c = clientObj();
+        const std::uintptr_t mgr = c ? rdp(c + off::IFACE_MANAGER) : 0;
+        const std::uint64_t gcount = mgr ? rd<std::uint64_t>(mgr + off::IFACE_GROUP_COUNT) : 0;
+        const std::uintptr_t garr = mgr ? rdp(mgr + off::IFACE_GROUP_ARRAY) : 0;
+        const std::uintptr_t empty = (off::IFACE_EMPTY_SENTINEL ? rdp(globalAddr(off::IFACE_EMPTY_SENTINEL) + 8) : 0);
+        if (garr && gcount > 0 && gcount <= 0x1000 && off::IFTYPE_LAST_PROCESS) {
+            perGroup.assign(static_cast<std::size_t>(gcount), -1);
+            for (std::uint64_t g = 0; g < gcount; ++g) {
+                const std::uintptr_t entry = garr + g * off::IFACE_GROUP_ENTRY_STRIDE;
+                const std::uintptr_t data = rdp(entry + off::IFACE_GROUP_ENTRY_DATA);
+                const std::uint64_t cc = data ? rd<std::uint64_t>(entry + off::IFACE_GROUP_ENTRY_COUNT) : 0;
+                if (!data || cc == 0 || cc > 4096) continue;
+                int best = -1;
+                for (std::uint64_t i = 0; i < cc; ++i) {
+                    const std::uintptr_t w = rdp(data + i * 16 + 8);
+                    if (!w || w == empty) continue;
+                    const int v = rd<std::int32_t>(w + off::IFTYPE_LAST_PROCESS, -1);
+                    if (v > best) best = v;
+                }
+                perGroup[static_cast<std::size_t>(g)] = best;
+                if (best > newest) newest = best;
+            }
+        }
+    }
+    const int g = (group >= 0 && static_cast<std::size_t>(group) < perGroup.size()) ? perGroup[static_cast<std::size_t>(group)] : -1;
+    return {g, newest};
+}
+
+/// Is the group ON SCREEN (not just loaded)? Measured live 2026-10-10 on the bank: OPEN, its first component is
+/// laid out (512x730) and its processed counter runs 7-8 behind the chatbox's; CLOSED but still loaded, that
+/// component is 0x0 and the counter sits at 0. So: a laid-out first component, or a counter within 50 of the
+/// newest.
+inline bool groupVisible(int group) {
+    const std::uintptr_t root = widgetObj(group << 16);
+    if (root && rd<std::int32_t>(root + off::IFTYPE_WIDTH) > 0 && rd<std::int32_t>(root + off::IFTYPE_HEIGHT) > 0) return true;
+    const auto v = groupProcessed(group);
+    return v[0] > 0 && v[1] > 0 && v[0] >= v[1] - 50;
+}
 
 namespace detail {
 

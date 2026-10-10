@@ -374,4 +374,7 @@ public final class Actions {
         if (npc == null || option < 1 || option > 5) return false;
         return Natives.interactNpc(npc.uid(), OPNPC1 + option - 1);
     }
+
+    /** Take the NPC's option named {@code name} ("Attack", "Net", "Lure"). False when it has none. */
+    public static boolean npc(Entity npc, String name) { return npc != null && npc(npc, npc.option(name)); }
 }

@@ -28,6 +28,7 @@
 //@category 0xClient
 import ghidra.app.script.GhidraScript;
 import ghidra.program.model.address.Address;
+import ghidra.program.model.listing.Data;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.mem.MemoryBlock;
@@ -1052,6 +1053,10 @@ public class DeriveOffsets extends GhidraScript {
     // ===========================================================================================
     private void derive5() {
         deriveTargets();
+        deriveResume();
+        deriveActorTarget();
+        deriveObjTypeBindings();
+        deriveIfTypeFields();
         deriveGroundItems();
         deriveItemDefs();
     }
@@ -1177,6 +1182,210 @@ public class DeriveOffsets extends GhidraScript {
         return out;
     }
 
+    /**
+     * ACT_RESUME: "Click here to continue" and dialogue options. The client sends them through a one-packet
+     * sender reached only by a tail jump from a small thunk that unpacks {widget, slot} from its argument
+     * block (`mov r8d,[rdx+4]; mov edx,[rdx]`), resolves the component, and jumps. The THUNK is what 0xClient
+     * calls (with the same block); exactly one sender is entered that way.
+     */
+    private void deriveResume() {
+        List<Address> thunks = new ArrayList<>();
+        for (Map.Entry<Function, Set<Long>> e : senderMap.entrySet()) {
+            if (e.getValue().size() != 1) continue;
+            Address entry = e.getKey().getEntryPoint();
+            for (Reference r : getReferencesTo(entry)) {
+                Instruction j = getInstructionAt(r.getFromAddress());
+                if (j == null || !j.getMnemonicString().equals("JMP")) continue;
+                boolean slot = false, widget = false, call = false;
+                Instruction q = j;
+                for (int k = 0; k < 10 && q != null; k++) {
+                    q = q.getPrevious();
+                    if (q == null) break;
+                    String t = q.toString();
+                    if (t.equals("MOV R8D,dword ptr [RDX + 0x4]")) slot = true;
+                    if (t.equals("MOV EDX,dword ptr [RDX]")) widget = true;
+                    if (q.getMnemonicString().equals("CALL")) call = true;
+                    if (q.getMnemonicString().equals("RET")) break;
+                }
+                if (!(slot && widget && call)) continue;
+                // the thunk's entry: walk back to the instruction after the previous RET/INT3/padding
+                Instruction st = j;
+                for (int k = 0; k < 16; k++) {
+                    Instruction pv = st.getPrevious();
+                    if (pv == null || pv.getMnemonicString().equals("RET") || pv.getMnemonicString().equals("INT3") || pv.getMnemonicString().equals("JMP")) break;
+                    st = pv;
+                }
+                if (!thunks.contains(st.getAddress())) thunks.add(st.getAddress());
+            }
+        }
+        if (thunks.size() == 1) put("ACT_RESUME", rva(thunks.get(0)), "the only thunk that unpacks {widget, slot}, resolves the component and tail-jumps into a one-packet sender: rva 0x" + Long.toHexString(rva(thunks.get(0))));
+        else notes.add("ACT_RESUME: " + thunks.size() + " candidate thunks -- not derived");
+    }
+
+    /**
+     * ENTITY_TARGET: the actor constructor stores 0x300 at +A, then -1 as three qwords at +A+4, +A+0xC, +A+0x14;
+     * the target uid is the first of those (verified live on 241-3 with the combat probe). The same four
+     * stores appear in one other, small function; the constructor is the one that also writes 0xFFFF0000
+     * to several fields through the same register.
+     */
+    private void deriveActorTarget() {
+        java.util.regex.Pattern head = java.util.regex.Pattern.compile("MOV dword ptr \\[(R\\w+) \\+ 0x([0-9a-f]+)\\],0x300");
+        List<long[]> hits = new ArrayList<>();
+        List<String> where = new ArrayList<>();
+        for (Instruction i : currentProgram.getListing().getInstructions(true)) {
+            if (monitor.isCancelled()) return;
+            if (!i.getMnemonicString().equals("MOV")) continue;
+            java.util.regex.Matcher m = head.matcher(i.toString());
+            if (!m.matches()) continue;
+            String reg = m.group(1);
+            long a = Long.parseLong(m.group(2), 16);
+            Instruction j = i.getNext();
+            boolean ok = true;
+            for (long w : new long[] {a + 4, a + 0xC, a + 0x14}) {
+                if (j == null || !j.toString().equals("MOV qword ptr [" + reg + " + 0x" + Long.toHexString(w) + "],-0x1")) { ok = false; break; }
+                j = j.getNext();
+            }
+            if (!ok) continue;
+            Function f = getFunctionContaining(i.getAddress());
+            if (f == null) continue;
+            int marks = 0;
+            for (Instruction k : currentProgram.getListing().getInstructions(f.getBody(), true))
+                if (k.toString().startsWith("MOV dword ptr [" + reg + " + 0x") && k.toString().endsWith("],0xffff0000")) marks++;
+            if (marks < 3) continue;
+            hits.add(new long[] {a + 4, rva(f.getEntryPoint())});
+            where.add(at(i));
+        }
+        if (hits.size() == 1) put("ENTITY_TARGET", hits.get(0)[0], "the actor constructor (rva 0x" + Long.toHexString(hits.get(0)[1]) + ") stores 0x300 then -1 as three qwords; the first qword is the target: " + where.get(0));
+        else notes.add("ENTITY_TARGET: " + hits.size() + " constructor patterns -- not derived");
+    }
+
+    /**
+     * The client describes its definition types to its scripting layer by name: a binder per type refers to
+     * "osrs.ObjType" / "osrs.NpcType" / "osrs.LocType" and registers each getter right after LEA-ing it
+     * ("getIOps", "getOps", "getSlot", "isTwoHanded"). The getters are one-liners over the definition, so the
+     * field each reads is the offset: inventory options, ground options, equipment slots, NPC options.
+     */
+    private void deriveObjTypeBindings() {
+        Address iops = binding("osrs.ObjType", "getIOps"), gops = binding("osrs.ObjType", "getOps");
+        Address slot = binding("osrs.ObjType", "getSlot"), two = binding("osrs.ObjType", "isTwoHanded");
+        Address nops = binding("osrs.NpcType", "getOps"), lops = binding("osrs.LocType", "getOps");
+        Long v;
+        // Which of the two option getters is which is decided by the SHAPE of the list, not by the names the
+        // binder pairs them with: pairing "the function LEA'd last before the name" put getIOps on +0xF0, and
+        // live (self-check 2026-10-10) +0xF0 held "//Take//" -- the ground list. The ground list is the same
+        // 0x40-stride vector as loc and NPC options (its converter indexes with sar/shl 6); the inventory list
+        // is a pointer to five NxtStrings (a converter with no 0x40 stride).
+        for (Address g : new Address[] {iops, gops}) {
+            Long f = r8Field(g);
+            Address conv = r8Converter(g);
+            if (f == null || conv == null) continue;
+            if (stride40Deep(conv)) put("ITEMDEF_OPS", f, "an ObjType option getter (rva 0x" + Long.toHexString(rva(g)) + ") hands def+N to the 0x40-stride converter: the ground list");
+            else put("ITEMDEF_IOPS", f, "an ObjType option getter (rva 0x" + Long.toHexString(rva(g)) + ") hands def+N to the five-string converter: the inventory list");
+        }
+        if (val("ITEMDEF_OPS") < 0) notes.add("ITEMDEF_OPS: no ObjType option getter with a 0x40-stride list");
+        if (val("ITEMDEF_IOPS") < 0) notes.add("ITEMDEF_IOPS: no ObjType option getter with a five-string list");
+        if (slot != null) for (Instruction i : linear(slot, 30)) {
+            Mem m = memOf(i);
+            if (m != null && m.hasDisp && m.disp > 0x10 && i.toString().matches("MOV E\\w+,dword ptr \\[R\\w+ \\+ 0x[0-9a-f]+\\]")) { put("ITEMDEF_SLOT", m.disp, "ObjType.getSlot reads it: " + at(i)); break; }
+        }
+        if (two != null) for (Instruction i : linear(two, 30)) {
+            Mem m = memOf(i);
+            if (m != null && m.hasDisp && i.toString().startsWith("CMP dword ptr [") && i.toString().endsWith("],0x5")) { put("ITEMDEF_SLOT2", m.disp, "ObjType.isTwoHanded tests it against the shield slot (5): " + at(i)); break; }
+        }
+        if ((v = r8Field(nops)) != null) put("NPCDEF_OPS", v, "NpcType.getOps (rva 0x" + Long.toHexString(rva(nops)) + ") hands def+N to the option converter");
+        else notes.add("NPCDEF_OPS: NpcType.getOps not found");
+        if ((v = r8Field(lops)) != null && val("LOCDEF_OPS") >= 0 && v != val("LOCDEF_OPS")) notes.add("LOCDEF_OPS: derived 0x" + Long.toHexString(val("LOCDEF_OPS")) + " but LocType.getOps reads 0x" + Long.toHexString(v));
+    }
+
+    /**
+     * IFTYPE_LAST_PROCESS: the "osrs.IfType" binder registers plain fields as `mov dword ptr [rbp+0x20],<offset>`
+     * followed by the field's name. "lastProcess" is the counter a component gets when it is processed; "width"
+     * and "hidden" are read the same way and cross-checked against IFTYPE_WIDTH / IFTYPE_HIDDEN.
+     */
+    private void deriveIfTypeFields() {
+        Long lp = fieldBinding("osrs.IfType", "lastProcess");
+        if (lp != null) put("IFTYPE_LAST_PROCESS", lp, "the osrs.IfType binder registers \"lastProcess\" at this offset");
+        else notes.add("IFTYPE_LAST_PROCESS: not found in the osrs.IfType binder");
+        Long w = fieldBinding("osrs.IfType", "width"), h = fieldBinding("osrs.IfType", "hidden");
+        if (w != null && val("IFTYPE_WIDTH") >= 0 && w != val("IFTYPE_WIDTH")) notes.add("IFTYPE_WIDTH: binder says 0x" + Long.toHexString(w));
+        if (h != null && val("IFTYPE_HIDDEN") >= 0 && h != val("IFTYPE_HIDDEN")) notes.add("IFTYPE_HIDDEN: binder says 0x" + Long.toHexString(h));
+    }
+
+    /** A plain field a type binder registers by offset: the `mov dword ptr [rbp+N],imm` just before its name. */
+    private Long fieldBinding(String type, String field) {
+        for (Address ts : findStrings(type)) for (Reference tr : getReferencesTo(ts)) {
+            Function f = getFunctionContaining(tr.getFromAddress());
+            if (f == null) continue;
+            Long imm = null;
+            for (Instruction i : currentProgram.getListing().getInstructions(f.getBody(), true)) {
+                String t = i.toString();
+                java.util.regex.Matcher m = java.util.regex.Pattern.compile("MOV dword ptr \\[RBP \\+ 0x[0-9a-f]+\\],0x([0-9a-f]+)").matcher(t);
+                if (m.matches()) { imm = Long.parseLong(m.group(1), 16); continue; }
+                if (!i.getMnemonicString().equals("LEA")) continue;
+                for (Reference r : i.getReferencesFrom()) {
+                    Data d = getDataAt(r.getToAddress());
+                    if (d != null && d.hasStringValue() && field.equals(d.getDefaultValueRepresentation().replaceAll("^\"|\"$", ""))) return imm;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** The getter a type binder registers under {@code getter}: the function LEA'd last before the name. */
+    private Address binding(String type, String getter) {
+        for (Address ts : findStrings(type)) for (Reference tr : getReferencesTo(ts)) {
+            Function f = getFunctionContaining(tr.getFromAddress());
+            if (f == null) continue;
+            Address lastFn = null;
+            for (Instruction i : currentProgram.getListing().getInstructions(f.getBody(), true)) {
+                if (!i.getMnemonicString().equals("LEA")) continue;
+                for (Reference r : i.getReferencesFrom()) {
+                    Address to = r.getToAddress();
+                    if (getFunctionAt(to) != null) { lastFn = to; continue; }
+                    Data d = getDataAt(to);
+                    if (d != null && d.hasStringValue() && getter.equals(d.getDefaultValueRepresentation().replaceAll("^\"|\"$", ""))) return lastFn;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** Does this converter index 0x40-byte entries itself, or through any function it calls in its first 80 instructions? */
+    private boolean stride40Deep(Address conv) {
+        if (stride40(conv)) return true;
+        for (Address c : callees(linear(conv, 80))) {
+            for (Instruction i : linear(c, 30)) {
+                String s = i.toString();
+                if (s.endsWith(",0x6") && (s.startsWith("SAR ") || s.startsWith("SHL "))) return true;
+            }
+        }
+        return false;
+    }
+
+    /** The function a getter calls right after setting R8 to "def + N" (the list converter), or null. */
+    private Address r8Converter(Address getter) {
+        if (getter == null) return null;
+        boolean seen = false;
+        for (Instruction i : linear(getter, 40)) {
+            String t = i.toString();
+            if (t.startsWith("ADD R8,0x") || t.startsWith("LEA R8,[R")) seen = true;
+            else if (seen && i.getMnemonicString().equals("CALL")) return callTarget(i);
+        }
+        return null;
+    }
+
+    /** The first "def + N" a getter hands on in R8 (`ADD R8,N` or `LEA R8,[reg + N]`), or null. */
+    private Long r8Field(Address getter) {
+        if (getter == null) return null;
+        for (Instruction i : linear(getter, 40)) {
+            String t = i.toString();
+            if (t.startsWith("ADD R8,0x")) return Long.parseLong(t.substring("ADD R8,0x".length()), 16);
+            Mem m = memOf(i);
+            if (t.startsWith("LEA R8,[R") && m != null && m.hasDisp && m.index.isEmpty() && !t.contains("RSP") && !t.contains("RBP")) return m.disp;
+        }
+        return null;
+    }
+
     private void deriveGroundItems() {
         Instruction s = firstRef("Could not find supplied coord's world instance in obj_find.");
         Function leafF = s == null ? null : getFunctionContaining(s.getAddress());
@@ -1249,7 +1458,7 @@ public class DeriveOffsets extends GhidraScript {
                 break;
             }
         }
-        List<Instruction> og = leaf("objGetOp", 160);
+        List<Instruction> og = val("ITEMDEF_OPS") >= 0 ? new ArrayList<>() : leaf("objGetOp", 160);   // fallback: the ObjType getter already found it
         for (int k = 0; k < og.size(); k++) {
             Instruction i = og.get(k);
             if (!i.getMnemonicString().equals("CALL")) continue;
@@ -1258,10 +1467,10 @@ public class DeriveOffsets extends GhidraScript {
             for (int b = k - 1; b >= 0 && b >= k - 6; b--) {
                 String t = og.get(b).toString();
                 Mem m = memOf(og.get(b));
-                if (t.startsWith("LEA RCX,[") && m != null && m.hasDisp && m.disp >= 0x40 && m.disp < 0x400) { put("ITEMDEF_GROUND_OPS", m.disp, "objGetOp hands def+N to the 0x40-stride option helper: " + at(og.get(b))); break; }
-                if (t.startsWith("ADD RCX,0x")) { put("ITEMDEF_GROUND_OPS", Long.parseLong(t.substring("ADD RCX,0x".length()), 16), "objGetOp hands def+N to the 0x40-stride option helper: " + at(og.get(b))); break; }
+                if (t.startsWith("LEA RCX,[") && m != null && m.hasDisp && m.disp >= 0x40 && m.disp < 0x400) { if (val("ITEMDEF_OPS") < 0) put("ITEMDEF_OPS", m.disp, "objGetOp hands def+N to the 0x40-stride option helper: " + at(og.get(b))); break; }
+                if (t.startsWith("ADD RCX,0x")) { if (val("ITEMDEF_OPS") < 0) put("ITEMDEF_OPS", Long.parseLong(t.substring("ADD RCX,0x".length()), 16), "objGetOp hands def+N to the 0x40-stride option helper: " + at(og.get(b))); break; }
             }
-            if (val("ITEMDEF_GROUND_OPS") >= 0) break;
+            if (val("ITEMDEF_OPS") >= 0) break;
         }
     }
 

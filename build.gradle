@@ -6,6 +6,12 @@
 //
 //   gradlew run       build everything and start the launcher   <- the one you want
 //   gradlew dist      build everything, don't start it
+//   gradlew debugRun  build, then start it with the log on (build/dist/oxc.log) -- the test run
+//   gradlew debugRun -Pprobe            ...and hook the action senders (who-sent-what for each click)
+//   gradlew debugRun -Pprobe=38d3d0,...  ...hooking exactly these RVAs (hex, up to three)
+//   gradlew debugRun -Pverify           ...and fold the self-check into offsets/ when the game closes
+//   gradlew debugRun -Pcombat           ...and look for the "who is fighting whom" fields (fight something)
+//   gradlew debugRun -Pge               ...and log the Grand Exchange's buttons and every distinct packet sender
 //   gradlew clean     throw it all away
 
 plugins {
@@ -261,6 +267,87 @@ tasks.register('run', Exec) {
     }
 
     commandLine distDir.get().file('0xClient.exe').asFile.absolutePath
+}
+
+// The test run: what used to be four `set` lines and `gradlew run`. Everything the DLL reads from the
+// environment is set here, the old log is cleared so the new one holds this session only, and when the
+// game closes the useful lines are summarised -- so a test is `gradlew debugRun`, play, close the game.
+tasks.register('debugRun', Exec) {
+    group = 'application'
+    description = 'Build, then start the launcher with logging (and optionally the action probe) on.'
+    dependsOn 'dist'
+
+    def logFile = distDir.map { it.file('oxc.log') }
+    // -Pprobe alone hooks the senders the tests so far needed: interface/item options, ground items,
+    // use-item-on-object. Three is the limit (the fourth debug register runs queued actions).
+    def probeDefault = '38d3d0,389400,387b30'
+    // read at configuration time: touching `project` while the task runs is deprecated
+    def probe = project.findProperty('probe')
+    def verify = project.hasProperty('verify')
+    def combat = project.hasProperty('combat')
+    def ge = project.hasProperty('ge')
+    def repoDir = project.projectDir
+
+    doFirst {
+        def exe = distDir.get().file('0xClient.exe').asFile
+        if (!exe.exists()) throw new GradleException("0xClient.exe was not built. Look for the CMake error above this.")
+        def log = logFile.get().asFile
+        if (log.exists()) log.delete()
+        environment 'OXC_LOG', log.absolutePath
+        if (ge) {
+            // buttons (interface options), the item-pick candidate (opcode 5), and every distinct packet sender
+            environment 'OXC_ACTIONPROBE', '1'
+            environment 'OXC_ACTIONPROBE_RVAS', '38d3d0,38afe0,6795c0'
+            environment 'OXC_ACTIONPROBE_ALLPACKETS', '1'
+            logger.lifecycle("\n  GE probe on: buy one item and sell one item by hand, then close the game")
+        } else if (probe != null) {
+            def rvas = (probe.toString().trim() in ['', 'true']) ? probeDefault : probe.toString().trim()
+            environment 'OXC_ACTIONPROBE', '1'
+            environment 'OXC_ACTIONPROBE_RVAS', rvas
+            logger.lifecycle("\n  probe on: ${rvas}")
+        }
+        if (combat) {
+            environment 'OXC_COMBATPROBE', '1'
+            logger.lifecycle("\n  combat probe on: attack something and let something attack you")
+        }
+        logger.lifecycle("\n  log -> ${log}")
+        logger.lifecycle("  Press '+ client' in the launcher, log in, do the test, then close the game.\n")
+    }
+
+    commandLine distDir.get().file('0xClient.exe').asFile.absolutePath
+
+    doLast {
+        def log = logFile.get().asFile
+        if (!log.exists()) { logger.lifecycle("\n  no log was written (did the game start?)"); return }
+        def lines = log.readLines('UTF-8')
+        def pick = { String tag -> lines.findAll { it.startsWith(tag) } }
+        def show = { String title, List l, int max ->
+            logger.lifecycle("\n  ${title}: ${l.size()}")
+            l.takeRight(max).each { logger.lifecycle("    ${it.length() > 200 ? it.substring(0, 200) + '...' : it}") }
+        }
+        show('[walker] lines', pick('[walker]'), 15)
+        show('[actions] sent', pick('[actions]'), 15)
+        if (combat) {
+            show('[combat] matches', lines.findAll { it.startsWith('[combat] my uid') }, 12)
+            show('[combat] last tally', lines.findAll { it.startsWith('[combat] tally') }, 16)
+        }
+        show('[probe] hits', lines.findAll { it.startsWith('[probe] t=') || it.startsWith('[probe]   selection') }, 20)
+        def fails = lines.findAll { it.startsWith('[selfcheck]') && it.contains(' fail ') }
+        show('[selfcheck] failures', fails, 20)
+
+        def report = distDir.get().file('offsets').asFile.listFiles()?.find { it.name.startsWith('selfcheck-') && it.name.endsWith('.json') }
+        if (report != null && verify) {
+            logger.lifecycle("\n  folding ${report.name} into offsets/ (passes only) ...")
+            def py = System.getProperty('os.name').toLowerCase().contains('win') ? 'python' : 'python3'
+            def proc = new ProcessBuilder(py, 'tools/update/verify.py', report.absolutePath, '--pass-only')
+                    .directory(repoDir).redirectErrorStream(true).start()
+            proc.inputStream.eachLine { logger.lifecycle("    ${it}") }
+            proc.waitFor()
+        } else if (report != null) {
+            logger.lifecycle("\n  self-check report: ${report}  (add -Pverify to fold its passes into offsets/)")
+        }
+        logger.lifecycle("\n  full log: ${log}\n")
+    }
 }
 
 // `gradlew clean` should also remove the native build tree, which lives outside Gradle's knowledge.

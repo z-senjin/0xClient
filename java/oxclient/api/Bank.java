@@ -43,6 +43,37 @@ public final class Bank {
     /** The close button: child 11 of component 12:2 (seen live). */
     static final int CLOSE_WIDGET = (12 << 16) | 2, CLOSE_CHILD = 11;
 
+    // Buttons along the bottom of the bank, from a hook of the user's own clicks (client-241-3, 2026-10-10):
+    // Deposit inventory, the Note toggle, and the quantity buttons 1 / 5 / 10 / X / All (each then makes a
+    // left click -- op 1 on the grid -- withdraw that many; X asks for a typed amount, which 0xClient cannot
+    // send: the reply is built inside the script interpreter, see GrandExchange). Seen working when clicked by
+    // hand; NOT YET SEEN clicked by 0xClient.
+    public static final int DEPOSIT_INVENTORY = (12 << 16) | 47;
+    public static final int NOTE = (12 << 16) | 25;
+    public static final int QTY_1 = (12 << 16) | 29, QTY_5 = (12 << 16) | 31, QTY_10 = (12 << 16) | 33,
+            QTY_X = (12 << 16) | 35, QTY_ALL = (12 << 16) | 37;
+
+    /** Set the quantity a left click withdraws: 1, 5, 10, or anything else for All. */
+    public static boolean quantity(int n) {
+        int w = switch (n) { case 1 -> QTY_1; case 5 -> QTY_5; case 10 -> QTY_10; default -> QTY_ALL; };
+        return Interfaces.click(w, -1, 1);
+    }
+
+    /** Deposit everything carried in one click. */
+    public static boolean depositInventory() { return Interfaces.click(DEPOSIT_INVENTORY, -1, 1); }
+
+    /** Withdraw as notes from now on (the bank remembers the setting). */
+    public static boolean withdrawAsNotes() { return Interfaces.click(NOTE, -1, 1); }
+
+    /**
+     * The "Item" button beside Note: withdraw items again. NOT MAPPED FROM A CLICK -- 12:23 is the component just
+     * before Note (12:25), the way the quantity buttons step by two; the user's test list checks it.
+     */
+    public static final int ITEM = (12 << 16) | 23;
+
+    /** Withdraw as items (not notes) from now on. */
+    public static boolean withdrawAsItems() { return Interfaces.click(ITEM, -1, 1); }
+
     /** True while the bank interface is loaded. */
     public static boolean isOpen() { return Interfaces.isOpen(GROUP); }
 
@@ -98,13 +129,15 @@ public final class Bank {
     public static boolean close() { return Interfaces.click(CLOSE_WIDGET, CLOSE_CHILD, 1); }
 
     /**
-     * Is this a bank you can open by clicking? A booth or chest -- its name has "bank" in it, not a
-     * deposit box -- with a "Bank" or "Use" option. Returns that option number, or -1.
+     * Is this a bank you can open by clicking? Anything with a "Bank" option that is not a deposit box (the
+     * Grand Exchange's booths are named "Grand Exchange booth", not "Bank booth": a name test missed them, live
+     * 2026-10-10), or a chest named "...bank..." with "Use". Returns that option number, or -1.
      */
     public static int bankOption(Scenery.SceneObject o) {
         String n = o.name().toLowerCase();
-        if (!n.contains("bank") || n.contains("deposit")) return -1;
+        if (n.contains("deposit")) return -1;
         int op = o.option("Bank");
-        return op > 0 ? op : o.option("Use");
+        if (op > 0) return op;
+        return n.contains("bank") ? o.option("Use") : -1;
     }
 }

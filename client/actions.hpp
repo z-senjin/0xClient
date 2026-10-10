@@ -30,7 +30,7 @@
 namespace oxc {
 namespace actions {
 
-enum Kind : int { Walk = 1, Npc = 2, Loc = 3, IfOp = 4, ObjOp = 5, OnItem = 6, OnLoc = 7, OnNpc = 8, OnObj = 9 };
+enum Kind : int { Walk = 1, Npc = 2, Loc = 3, IfOp = 4, ObjOp = 5, OnItem = 6, OnLoc = 7, OnNpc = 8, OnObj = 9, Resume = 10 };
 
 struct Act {
     int kind = 0;
@@ -151,6 +151,9 @@ inline void pump(CONTEXT*) {
         // {level, x, y, id, quantity, op, flag} -- the menu thunk 0x3893d0's block (offsets.hpp)
         int args[7] = {a.a, a.b, a.c, a.id, a.qty, a.op, 0};
         reinterpret_cast<ObjOpFn>(base + off::ACT_OBJ_OP)(nullptr, a.id, a.qty, args, a.op, 0);
+    } else if (a.kind == Resume) {
+        int args[2] = {a.a, a.b};                       // {widget, slot} -- the thunk's own block
+        reinterpret_cast<OnFn>(base + off::ACT_RESUME)(nullptr, args);
     } else if (a.kind == OnItem) {
         int args[3] = {a.a, a.b, a.id};
         if (!withSelection(a, off::ACT_ON_ITEM, args)) d.result = -2;
@@ -191,6 +194,7 @@ inline std::uintptr_t senderFor(int kind) {
     switch (kind) {
         case IfOp: return off::ACT_IF_OP;
         case ObjOp: return off::ACT_OBJ_OP;
+        case Resume: return off::ACT_RESUME;
         case OnItem: return off::ACT_ON_ITEM;
         case OnLoc: return off::ACT_ON_LOC;
         case OnNpc: return off::ACT_ON_NPC;
@@ -203,6 +207,7 @@ inline const char* kindName(int kind) {
     switch (kind) {
         case IfOp: return "item/interface options (ACT_IF_OP)";
         case ObjOp: return "ground item options (ACT_OBJ_OP)";
+        case Resume: return "continue / dialogue options (ACT_RESUME)";
         case OnItem: return "use item on item (ACT_ON_ITEM)";
         case OnLoc: return "use item on object (ACT_ON_LOC)";
         case OnNpc: return "use item on NPC (ACT_ON_NPC)";
@@ -263,6 +268,7 @@ inline void tick() {
         else if (a.kind == Npc) oxc::logf("[actions] NPC uid %d option %d: %s\n", a.a, a.op, d.result > 0 ? "sent" : "not found, dropped");
         else if (a.kind == Loc) oxc::logf("[actions] object %d at (%d,%d) option %d: sent\n", a.id, a.b, a.c, a.op);
         else if (a.kind == IfOp) oxc::logf("[actions] item %d in widget 0x%x slot %d option %d: sent\n", a.id, static_cast<unsigned>(a.a), a.b, a.op);
+        else if (a.kind == Resume) oxc::logf("[actions] continue/option widget 0x%x slot %d: sent\n", static_cast<unsigned>(a.a), a.b);
         else if (a.kind == ObjOp) oxc::logf("[actions] ground item %d x%d at (%d,%d) option %d: sent\n", a.id, a.qty, a.b, a.c, a.op);
         else {
             const char* what = a.kind == OnItem ? "item" : a.kind == OnLoc ? "object" : a.kind == OnNpc ? "NPC" : "ground item";
@@ -313,6 +319,15 @@ inline bool walkTo(int sceneX, int sceneY) {
     return doAction(sceneX, sceneY, off::OP_WALK, 0);
 }
 
+/// Continue a dialogue, or pick a dialogue option: the component (and child, -1 for none) the client itself
+/// sends when it is clicked. Queued; false when dropped.
+inline bool resumeDialog(int widgetId, int slot) {
+    if (!clientObj() || widgetId <= 0) return false;
+    actions::Act a;
+    a.kind = actions::Resume; a.a = widgetId; a.b = slot;
+    return actions::submit(a);
+}
+
 /// The level the local player is on (0 when unknown).
 inline int myLevel() {
     bool f = false;
@@ -334,7 +349,9 @@ inline bool groundItemAction(int sceneX, int sceneY, int itemId, int quantity, i
 /// targetId = item), 7 object (tx, ty = SCENE tile, targetId = loc id), 8 NPC (targetId = uid),
 /// 9 ground item (tx, ty = SCENE tile, targetId = item id).
 inline bool useItemOn(int kind, int srcWidget, int srcSlot, int srcItem, int tx, int ty, int targetId) {
-    if (!clientObj() || srcItem < 0 || srcSlot < 0) return false;
+    // an item selection has a slot and an item; a SPELL selection is the spellbook component alone (-1, -1)
+    const bool spell = srcSlot == -1 && srcItem == -1 && srcWidget > 0xFFFF;
+    if (!clientObj() || (!spell && (srcItem < 0 || srcSlot < 0))) return false;
     actions::Act a;
     a.kind = kind; a.sw = srcWidget; a.ss = srcSlot; a.si = srcItem; a.id = targetId;
     if (kind == actions::OnItem) { a.a = tx; a.b = ty; }

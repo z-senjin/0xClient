@@ -73,6 +73,28 @@ public final class Inventory {
         return Natives.itemAction(WIDGET, slot, op, ids[slot]);
     }
 
+    /**
+     * The game's option number for inventory option {@code i} (0..4 in {@link Items#inventoryOptions}). The
+     * inventory numbers its options 2, 3, 4, 6, 7 (1 is the left-click "Use" selection, 5 is not an item
+     * option). Drop -- the fifth, 7 -- was SEEN WORKING (MntnChopper, 241-3); the others follow the same
+     * numbering and are NOT SEEN WORKING YET (eat, wield and bury are the next to watch).
+     */
+    public static final int[] OPTION_NUMBERS = {2, 3, 4, 6, 7};
+
+    /** Take the option named {@code name} ("Eat", "Wield", "Bury") on the item in {@code slot}. False when it has none. */
+    public static boolean interact(int slot, String name) {
+        int[] ids = ids();
+        if (slot < 0 || slot >= ids.length || ids[slot] < 0) return false;
+        int i = Items.inventoryOption(ids[slot], name);
+        return i >= 0 && interact(slot, OPTION_NUMBERS[i]);
+    }
+
+    /** True when the item in {@code slot} has an option named {@code name}. */
+    public static boolean hasOption(int slot, String name) {
+        int[] ids = ids();
+        return slot >= 0 && slot < ids.length && ids[slot] >= 0 && Items.inventoryOption(ids[slot], name) >= 0;
+    }
+
     /** The first slot holding an item with this name (ignoring case), or -1. */
     public static int firstSlot(String name) {
         int[] ids = ids();

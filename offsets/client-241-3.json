@@ -1,7 +1,7 @@
 {
   "build": "241-3",
   "sha256": "166231c8f6bd05c7542b8f0d35eb64b0aad701a87ba6ba41f60c4706de946944",
-  "derived": "2026-10-09T18:23:01Z",
+  "derived": "2026-10-09T19:35:24Z",
   "source": "DeriveOffsets.java",
   "notes": "DO_ACTION candidate for a hook-and-log run: rva 0x372870 is the widget-menu action path (its args are a packed widget id and a component index, NOT scene x/y) | packet-start function rva 0x6795c0 (77 call sites)",
   "offsets": {
@@ -75,6 +75,12 @@
       "evidence": "the only four-plus-packet sender that loads its option from the stack in its prologue and tests it with CMP ECX,1 (neither the NPC nor the object sender): rva 0x389400",
       "plausible": "hook-and-log 2026-10-09: the client's own Take on a dropped log called it with (id 1511, quantity 1, args, option 3, flag 0); 0xClient's own call not yet seen"
     },
+    "ACT_RESUME": {
+      "value": 3722784,
+      "status": "derived",
+      "kind": "code",
+      "evidence": "the only thunk that unpacks {widget, slot}, resolves the component and tail-jumps into a one-packet sender: rva 0x38ce20"
+    },
     "TARGET_STATE": {
       "value": 4273136,
       "status": "verified",
@@ -120,7 +126,7 @@
       "status": "derived",
       "kind": "code",
       "evidence": "the selection-reading sender that resolves its target component the way ACT_IF_OP does (three or more shared callees): rva 0x38cf70",
-      "plausible": "hook-and-log 2026-10-09 (client-241-3): the client's own 'Use Tinderbox -> Logs' called ACT_ON_ITEM with target {0x950000, slot 2, 1511} while the selection read +0x90=0x950000, +0x94=1 (the slot), +0x98=590 (the item); 0xClient's own call through it not yet seen"
+      "plausible": "hook-and-log 2026-10-09: the client's own 'Use Tinderbox -> Logs' passed target {0x950000, 2, 1511}; 0xClient's own call not yet seen"
     },
     "ACT_ON_LOC": {
       "value": 3701552,
@@ -165,8 +171,7 @@
       "status": "derived",
       "kind": "field",
       "evidence": "21ebab  MOV EDI,dword ptr [R15 + 0x895cc]",
-      "previous": 562652,
-      "plausible": "self-check 2026-10-09: camera height -822 (negative is up)"
+      "previous": 562652
     },
     "CAMERA_FINE_Y": {
       "value": 562640,
@@ -297,8 +302,7 @@
       "since_status": "suspect",
       "evidence": "not derived on 241-3; value last suspect on 240-6: compiled default (client/offsets.hpp): SUSPECT: 0..10000 on the build it came from",
       "previous": 13520,
-      "inference": "not derived; the nearest derived client object fields on both sides (0x3428 and 0x49b8) both moved by -0x10, so this one was moved with them. Verify before trusting",
-      "plausible": "self-check 2026-10-09: read 1 (0..10000 expected)"
+      "inference": "not derived; the nearest derived client object fields on both sides (0x3428 and 0x49b8) both moved by -0x10, so this one was moved with them. Verify before trusting"
     },
     "CYCLE": {
       "value": 8548,
@@ -351,15 +355,13 @@
       "status": "derived",
       "kind": "field",
       "evidence": "getMapOrigin leaf: 3a315b  MOV RCX,qword ptr [RAX + 0x49a8]",
-      "previous": 18872,
-      "plausible": "self-check 2026-10-09: world map object 0000016EEB387AC0"
+      "previous": 18872
     },
     "WM_ORIGIN_LEVEL": {
       "value": 21688,
       "status": "derived",
       "kind": "field",
-      "evidence": "getMapOrigin leaf reads the MapCoord: 3a3162  MOVSD XMM0,qword ptr [RCX + 0x54b8]",
-      "plausible": "self-check 2026-10-09: origin level 0"
+      "evidence": "getMapOrigin leaf reads the MapCoord: 3a3162  MOVSD XMM0,qword ptr [RCX + 0x54b8]"
     },
     "WM_ORIGIN_X": {
       "value": 21692,
@@ -389,8 +391,7 @@
       "value": 22406440,
       "status": "derived",
       "kind": "global",
-      "evidence": "getVarp leaf: 0f5900  MOV RAX,qword ptr [0x14155e528]",
-      "plausible": "self-check 2026-10-09: 162 of the first 4000 varps nonzero"
+      "evidence": "getVarp leaf: 0f5900  MOV RAX,qword ptr [0x14155e528]"
     },
     "GET_VARBIT": {
       "value": 5956400,
@@ -764,11 +765,31 @@
       "kind": "field",
       "evidence": "ocCost hands this field to Lua: 1ebfb6  MOV EDX,dword ptr [RDX + 0xd8]"
     },
-    "ITEMDEF_GROUND_OPS": {
+    "ITEMDEF_SLOT": {
+      "value": 220,
+      "status": "derived",
+      "kind": "field",
+      "evidence": "ObjType.getSlot reads it: 23b87d  MOV EDI,dword ptr [RAX + 0xdc]"
+    },
+    "ITEMDEF_SLOT2": {
+      "value": 224,
+      "status": "derived",
+      "kind": "field",
+      "evidence": "ObjType.isTwoHanded tests it against the shield slot (5): 23b7d1  CMP dword ptr [RAX + 0xe0],0x5"
+    },
+    "ITEMDEF_IOPS": {
+      "value": 264,
+      "status": "derived",
+      "kind": "field",
+      "evidence": "an ObjType option getter (rva 0x23b2e0) hands def+N to the five-string converter: the inventory list",
+      "note": "swapped with ITEMDEF_OPS 2026-10-10 after the self-check read Take at +0xF0"
+    },
+    "ITEMDEF_OPS": {
       "value": 240,
       "status": "derived",
       "kind": "field",
-      "evidence": "objGetOp hands def+N to the 0x40-stride option helper: 1edd26  LEA RCX,[RBP + 0xf0]"
+      "evidence": "an ObjType option getter (rva 0x23aff0) hands def+N to the 0x40-stride converter: the ground list",
+      "note": "seen live 2026-10-10: a Bronze sword's +0xF0 list read //Take// (self-check); the self-check pass on the next run makes it verified"
     },
     "ENTITY_SCENE_X": {
       "value": 1008,
@@ -792,8 +813,7 @@
       "kind": "field",
       "since": "241-1",
       "since_status": "derived",
-      "evidence": "not derived on 241-3; value last derived on 241-1: dword both coordinate leaves read below the scene coords: the render height (fine x/y follow at +4/+8)",
-      "plausible": "self-check 2026-10-09: ground height -312"
+      "evidence": "not derived on 241-3; value last derived on 241-1: dword both coordinate leaves read below the scene coords: the render height (fine x/y follow at +4/+8)"
     },
     "ENTITY_FINE_X": {
       "value": 616,
@@ -818,15 +838,13 @@
       "status": "suspect",
       "kind": "field",
       "evidence": "not derived on 241-3; value last suspect on 240-6: compiled default (client/offsets.hpp): SUSPECT: this build points at 0x7CC instead",
-      "verification": "FAILED self-check 2026-10-09: read 44",
-      "plausible": "self-check 2026-10-09: read 0"
+      "verification": "FAILED self-check 2026-10-09: read 44"
     },
     "ENTITY_PLANE_COORD": {
       "value": 1944,
       "status": "derived",
       "kind": "field",
-      "evidence": "the one dword the coord leaf reads off the entity that npcCoord does not (its level)",
-      "plausible": "self-check 2026-10-09: read 0"
+      "evidence": "the one dword the coord leaf reads off the entity that npcCoord does not (its level)"
     },
     "ENTITY_DEF_PTR": {
       "value": 1840,
@@ -835,6 +853,12 @@
       "evidence": "npcName's resolver loads the definition: 0a00ee  MOV RDX,qword ptr [RSI + 0x730]",
       "verified_on": "2026-10-09",
       "verification": "self-check 2026-10-09: 14 of 14 NPCs have a readable name (Drake, Butterfly, Goblin, Duckling, Goblin, Cassius, Goblin, Goblin)"
+    },
+    "NPCDEF_OPS": {
+      "value": 256,
+      "status": "derived",
+      "kind": "field",
+      "evidence": "NpcType.getOps (rva 0x23a590) hands def+N to the option converter"
     },
     "ENTITY_NAME_OVERRIDE": {
       "value": 1808,
@@ -916,8 +940,7 @@
       "status": "derived",
       "kind": "global",
       "evidence": "widget lookup returns this static empty object on a miss: 5af7d7  LEA RAX,[0x14155e5e8]",
-      "previous": 22398448,
-      "plausible": "self-check 2026-10-09: 0 component slots hold the shared empty object"
+      "previous": 22398448
     },
     "IFTYPE_X": {
       "value": 92,
@@ -955,8 +978,13 @@
       "value": 120,
       "status": "derived",
       "kind": "field",
-      "evidence": "IfType registration rva 0x225f10 binds \"hidden\" to this offset (226bdf)",
-      "plausible": "self-check 2026-10-09: 2009 of 2009 hidden flags are 0/1"
+      "evidence": "IfType registration rva 0x225f10 binds \"hidden\" to this offset (226bdf)"
+    },
+    "IFTYPE_LAST_PROCESS": {
+      "value": 56,
+      "status": "derived",
+      "kind": "field",
+      "evidence": "the osrs.IfType binder registers \"lastProcess\" at this offset"
     },
     "IFTYPE_CHILDREN_COUNT": {
       "value": 2896,
@@ -1017,8 +1045,7 @@
       "since": "240-6",
       "since_status": "verified",
       "evidence": "not derived on 241-3; value last verified on 240-6: compiled default (client/offsets.hpp): current animation id, -1 when idle",
-      "inference": "the nearest derived entity fields on both sides (0x418, 0x710) did not move, so this one most likely did not either",
-      "plausible": "self-check 2026-10-09: 24 of 24 entities -1 or a sequence id"
+      "inference": "the nearest derived entity fields on both sides (0x418, 0x710) did not move, so this one most likely did not either"
     },
     "ENTITY_ORIENTATION": {
       "value": 992,
@@ -1026,8 +1053,15 @@
       "kind": "field",
       "since": "240-6",
       "since_status": "default",
-      "evidence": "not derived on 241-3; value last default on 240-6: compiled default (client/offsets.hpp): 0..2047, 0 = south, rising clockwise",
-      "plausible": "self-check 2026-10-09: 24 of 24 entities in 0..2047, 15 nonzero"
+      "evidence": "not derived on 241-3; value last default on 240-6: compiled default (client/offsets.hpp): 0..2047, 0 = south, rising clockwise"
+    },
+    "ENTITY_TARGET": {
+      "value": 936,
+      "status": "verified",
+      "kind": "field",
+      "evidence": "the actor constructor (rva 0x9dcd0) stores 0x300 then -1 as three qwords; the first qword is the target: 09de2c  MOV dword ptr [RBX + 0x3a4],0x300",
+      "verified_on": "2026-10-09",
+      "verification": "combat probe 2026-10-09 (client-241-3, gradlew debugRun -Pcombat): attacking a Chicken, your +0x3A8 held its uid and its +0x3A8 held your handle 1805; idle, yours had no match; a Goblin attacking you held 1805 while hitpoints fell 10 -> 5"
     },
     "PLAYER_COMBAT_LEVEL": {
       "value": 1844,

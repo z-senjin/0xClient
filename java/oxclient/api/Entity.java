@@ -14,11 +14,18 @@ import oxclient.Natives;
 public final class Entity {
 
     private final int uid, sceneX, sceneY, id, animation, orientation;
-    private final int fineX, fineH, fineY;
+    private final int fineX, fineH, fineY, target;
     private final boolean player;
 
+    /** Without a target (-1): the shape tests build (java-test EntityTestSupport). */
     Entity(int uid, int sceneX, int sceneY, boolean player, int id, int animation, int orientation,
            int fineX, int fineH, int fineY) {
+        this(uid, sceneX, sceneY, player, id, animation, orientation, fineX, fineH, fineY, -1);
+    }
+
+    Entity(int uid, int sceneX, int sceneY, boolean player, int id, int animation, int orientation,
+           int fineX, int fineH, int fineY, int target) {
+        this.target = target;
         this.fineX = fineX;
         this.fineH = fineH;
         this.fineY = fineY;
@@ -132,6 +139,25 @@ public final class Entity {
 
     /** The outline of the tile it stands on, lying on the ground at its own height. */
     public java.awt.Polygon tileOutline() { return Game.tileOutline(sceneX, sceneY, fineH); }
+
+    /**
+     * The uid of whoever this actor is fighting or interacting with, -1 for none (ENTITY_TARGET, verified live
+     * on 241-3). For an NPC attacking you it is your handle ({@link Game#me()}'s uid).
+     */
+    public int target() { return target; }
+
+    /** True when this NPC is fighting or interacting with someone other than you. */
+    public boolean busyWithOther() { return target >= 0 && target != Game.me().uid(); }
+
+    /** An NPC's five options ("Attack", "Talk-to", "Net"); option n is {@code [n-1]}. Empty strings for a player. */
+    public String[] options() { return player ? new String[] {"", "", "", "", ""} : Items.split(oxclient.Natives.npcOptions(uid)); }
+
+    /** The option number (1..5) named {@code text}, ignoring case, or -1. */
+    public int option(String text) {
+        String[] ops = options();
+        for (int i = 0; i < ops.length; i++) if (ops[i].equalsIgnoreCase(text)) return i + 1;
+        return -1;
+    }
 
     @Override
     public String toString() {

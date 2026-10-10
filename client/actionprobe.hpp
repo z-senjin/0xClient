@@ -27,6 +27,11 @@
 //             of a 0x37d280 hit, with a backtrace
 //   0x372870  the widget-menu action (fills the pending-action record)
 // Each handler's RDX is its argument block, dumped in full -- the layout actions.hpp builds by hand.
+//
+// OXC_ACTIONPROBE_ALLPACKETS=1: the packet hook (0x6795c0, when listed) logs EVERY outgoing packet, not just
+// those within two seconds of a menu click -- but each (opcode, caller) pair only once, so the log is a list
+// of the distinct senders that ran. That is how a sender that no menu click reaches is found: the reply to
+// an "Enter amount" prompt, the pick from the Grand Exchange item search (gradlew debugRun -Pge).
 #pragma once
 #include <windows.h>
 #include <tlhelp32.h>
@@ -69,6 +74,10 @@ struct State {
     std::uint64_t entryExecRva = 0;  // the click itself
     std::uint64_t entryCopyRva = 0;  // dump RDX+0x100
     std::atomic<std::uint64_t> lastClickTick{0};
+    bool allPackets = false;                 // OXC_ACTIONPROBE_ALLPACKETS=1
+    static constexpr int kSeen = 256;
+    std::uint64_t seen[kSeen] = {};          // (opcode, caller) pairs already logged
+    std::atomic<int> nSeen{0};
     Hit ring[kRing];
     std::atomic<std::uint32_t> head{0};
     std::uint32_t tail = 0;
@@ -94,7 +103,19 @@ inline void record(CONTEXT* c) {
     const std::uint64_t rva = c->Rip - s.base;
     const std::uint64_t now = GetTickCount64();
     if (rva == s.entryExecRva) s.lastClickTick.store(now);
-    if (rva == s.packetRva && now - s.lastClickTick.load() >= 2000) return;   // packets: only after a click
+    if (rva == s.packetRva) {
+        if (s.allPackets) {                   // every distinct (opcode, caller) once
+            const std::uint64_t ret = readableRaw(c->Rsp, 8) ? *reinterpret_cast<std::uint64_t*>(c->Rsp) : 0;
+            const std::uint64_t key = ((c->Rdx & 0xFFFF) << 48) ^ (ret - s.base);
+            const int n = s.nSeen.load();
+            for (int k = 0; k < n && k < State::kSeen; ++k) if (s.seen[k] == key) return;
+            if (n >= State::kSeen) return;
+            s.seen[n] = key;
+            s.nSeen.store(n + 1);
+        } else if (now - s.lastClickTick.load() >= 2000) {
+            return;                           // packets: only after a click
+        }
+    }
     const std::uint32_t i = s.head.load();
     if (i - s.tail >= kRing) { s.dropped.fetch_add(1); return; }
     Hit& h = s.ring[i % kRing];
@@ -236,6 +257,7 @@ private:
         s.entryExecRva = 0x37d280;
         s.entryCopyRva = 0x37d090;
         s.packetRva = 0x6795c0;
+        if (const char* a = ::getenv("OXC_ACTIONPROBE_ALLPACKETS")) s.allPackets = a[0] == '1';
         int armed = 0;
         for (std::uint64_t r : s.rva) {
             if (!r) continue;

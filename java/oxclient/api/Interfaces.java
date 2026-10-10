@@ -32,11 +32,29 @@ public final class Interfaces {
         public boolean click(int op) { return Interfaces.click(widgetId(), child, op); }
     }
 
-    /** Is the group loaded right now? */
+    /**
+     * Is the group on screen right now? Loaded AND processed this frame. The client keeps an interface
+     * loaded after it is closed (the bank read as "open" long after closing, live 2026-10-10), so loaded alone
+     * is not enough. If the processed counter turns out not to move at all -- not even for the chatbox and the
+     * inventory, which are always shown -- this falls back to "loaded", as before.
+     */
     public static boolean isOpen(int group) {
+        // ON SCREEN, not just loaded: the client keeps a closed interface loaded. Measured live 2026-10-10 on the
+        // bank (OXC_LOG [iface]): open, its first component is laid out (512x730); closed, it is 0x0
+        // (Natives.groupVisible). If even the always-shown chatbox fails that test, the signal is broken on this
+        // build and "loaded" is used instead. Only the bank (12) has been measured; every other group stays
+        // "loaded" until its own [iface] reading is checked (the GE, 465, has not been seen open in a log yet).
+        if (!isLoaded(group)) return false;
+        if (group != 12) return true;
+        return !Natives.groupVisible(162) || Natives.groupVisible(group);
+    }
+
+    /** Is the group loaded (possibly closed and kept)? */
+    public static boolean isLoaded(int group) {
         for (int g : Natives.loadedGroups()) if (g == group) return true;
         return false;
     }
+
 
     /** Every text line of the group, components and their children; empty when it is not loaded. */
     public static List<Line> text(int group) {

@@ -171,6 +171,21 @@ inline std::uintptr_t ACT_IF_OP  = 0;
 // called it as (1511, 1, args, 3, 0) -- the layout above, Take = option 3. 0xClient's own call not yet seen.
 inline std::uintptr_t ACT_OBJ_OP = 0;
 
+// DIALOGUES: "Click here to continue" and the "Select an Option" menu.
+//
+//   ACT_RESUME  void resume(void*, int args[2])        args = {widgetId, slot}
+//               the component that says "Click here to continue" (slot -1), or the options menu's
+//               component and the chosen option's child index
+//
+// The menu-entry thunk 0x38ce20 does `mov r8d,[rdx+4]; mov edx,[rdx]`, resolves that component
+// (0x5af860, the resolver ACT_IF_OP uses) and tail-jumps into the sender 0x38ce50, which -- unless a
+// resume is already pending ([client+0x413b80] != 0) -- starts packet 0x10 with the component's id and
+// slot. 0xClient calls the THUNK, with the same {widget, slot} block. HOW FOUND (client-241-3, 2026-10-09,
+// static), after posted Space presses were seen NOT to continue a level-up message live. AUTOMATED
+// (derive5): the only thunk that unpacks {widget, slot}, resolves the component and tail-jumps into a
+// one-packet sender. NOT VERIFIED LIVE.
+inline std::uintptr_t ACT_RESUME = 0;
+
 // USE ITEM ON ... ("Use" an inventory item, then click the target). The client keeps the item you picked
 // with "Use" in a SELECTION, and each target sender reads it from there rather than taking it as an
 // argument:
@@ -635,17 +650,33 @@ inline std::uintptr_t OBJ_COUNT       = 0x24;   // field on a ground item (int)
 // ---------------------------------------------------------------------------------------------------
 // The same cache shape as LOCDEF_CACHE: a global bucket array (count at +8), nodes {u64 id, ctrl, def,
 // ..., next at +0x40}. Fields on a definition: the name (NxtString), "stackable" (== 1), the shop value,
-// and the ground options (a vector of 0x40-byte entries, like LOCDEF_OPS).
+// and its options: the GROUND options (a vector of 0x40-byte entries, like LOCDEF_OPS) and the INVENTORY
+// options (a pointer to five 24-byte NxtStrings), plus the equipment slot it is worn in.
 // HOW FOUND (client-241-3, 2026-10-09, static): the ocName binding calls the getter 0x5f5cd0 (`mov r8d,
 // [0xde1338]; div; mov rcx,[0xde1330]` ... `cmp r14,[rdx]` / `mov rdx,[rdx+0x40]`) and hands def+0x8 to
 // Lua; ocStackable tests `[def+0xd4] == 1`; ocCost hands `[def+0xd8]`; objGetOp hands def+0xf0 to the
 // option helper 0x5e63b0. AUTOMATED (derive5). Cache + name VERIFIED LIVE 2026-10-09 (the self-check named
-// every carried item: Bronze pickaxe, Tinderbox, Logs); stackable, value and ground options not yet checked.
+// every carried item: Bronze pickaxe, Tinderbox, Logs); stackable, value and options not yet checked.
+//
+// Options and slot: the client's own type description "osrs.ObjType" (its binder 0xf4b40 registers each
+// getter under its name). Two option getters: 0x23aff0 does `add r8,0xf0` and hands it to the 0x40-stride
+// converter 0x5101b0 (the one NpcType.getOps and LocType.getOps use); 0x23b2e0 does `lea r8,[rdi+0x108]` and
+// hands it to 0x50fd70, which reads five NxtStrings at +0, +0x18 .. +0x60 of the pointer stored there.
+// WHICH IS WHICH, LIVE (self-check, 2026-10-10): +0xF0 on a Bronze sword read "//Take//" -- the GROUND list
+// (Take is the third ground option) -- so +0xF0 is ITEMDEF_OPS and +0x108 the INVENTORY list. (On 2026-10-09
+// they were paired with the getter NAMES by "the function LEA'd last before the name", which put getIOps on
+// +0xF0; that pairing is wrong for these two, so the rule now goes by the list's shape instead.)
+// getSlot (0x23b860) reads +0xDC; isTwoHanded tests +0xDC == 3 (weapon) and +0xE0 == 5 (shield) -- the second
+// slot a worn item occupies. AUTOMATED (deriveObjTypeBindings). +0xF0 = ground: seen live; +0x108 = inventory:
+// NOT VERIFIED LIVE (the self-check expects "Drop" there for every carried item).
 inline std::uintptr_t ITEMDEF_CACHE      = 0;      // global (rva of the bucket-array pointer)
 inline std::uintptr_t ITEMDEF_NAME       = 0x8;    // field on an item definition (NxtString)
 inline std::uintptr_t ITEMDEF_STACKABLE  = 0xD4;   // field on an item definition (int, 1 = stackable)
 inline std::uintptr_t ITEMDEF_COST       = 0xD8;   // field on an item definition (int, shop value)
-inline std::uintptr_t ITEMDEF_GROUND_OPS = 0xF0;   // field on an item definition (vector of 0x40-byte entries)
+inline std::uintptr_t ITEMDEF_SLOT       = 0xDC;   // field on an item definition (int, equipment slot, -1 none)
+inline std::uintptr_t ITEMDEF_SLOT2      = 0xE0;   // field on an item definition (int, a second slot it blocks)
+inline std::uintptr_t ITEMDEF_OPS        = 0xF0;   // field on an item definition (vector of 0x40-byte entries): ground
+inline std::uintptr_t ITEMDEF_IOPS       = 0x108;  // field on an item definition (pointer to five NxtStrings): inventory
 
 // ---------------------------------------------------------------------------------------------------
 // FIELDS ON AN ENTITY (a player or an NPC)
@@ -707,6 +738,14 @@ inline std::uintptr_t ENTITY_PLANE_COORD = 0x7CC;
 // definition here, so this reads as garbage for them -- check isPlayer first.
 // NOT re-verified on client-240-6 (the live walk confirmed coords/animation/orientation, not this).
 inline std::uintptr_t ENTITY_DEF_PTR = 0x730;
+
+// An NPC definition's options ("Attack", "Talk-to", "Net"), a vector of 0x40-byte entries like LOCDEF_OPS.
+// HOW FOUND (client-241-3, 2026-10-09, static): the "osrs.NpcType" binder (0xf3fe0) registers getOps =
+// 0x23a590, which looks the definition up (0x5f18f0) and hands `lea r8,[rdi+0x100]` to the 0x40-stride
+// converter 0x5101b0 -- the same converter ObjType.getIOps uses. AUTOMATED (deriveObjTypeBindings). NOT
+// VERIFIED LIVE: assumes the definition getOps reads is the one ENTITY_DEF_PTR points at (its +0x8 is the
+// name both ways); the self-check reads the options of the NPCs around you.
+inline std::uintptr_t NPCDEF_OPS = 0x100;  // field on an NPC definition (vector of 0x40-byte entries)
 
 // Names. The client's string type ("NxtString", 24 bytes, used for every name) is:
 //   +0x00 char* heap data -- OR the first byte of a 23-byte inline buffer (SSO)
@@ -781,6 +820,18 @@ inline std::uintptr_t IFTYPE_Y            = 0x60;
 inline std::uintptr_t IFTYPE_WIDTH        = 0x64;
 inline std::uintptr_t IFTYPE_HEIGHT       = 0x68;
 inline std::uintptr_t IFTYPE_HIDDEN       = 0x78;   // bool
+
+// When a component was last processed (an int counter). An interface on screen is processed every frame, so
+// its components' value keeps up with the always-shown ones (chatbox, inventory); a closed one is left LOADED
+// (its components stay in the manager -- why "loaded" cannot mean "open": the bank read as open long after it
+// was closed, live 2026-10-10) but its value stops. HOW FOUND (client-241-3, 2026-10-10, static): the
+// "osrs.IfType" binder (0x225f10) registers each field as `mov dword [rbp+0x20],<offset>` then the name;
+// "lastProcess" gets 0x38 (the same pattern gives "width" 0x64 and "hidden" 0x78, both verified above).
+// AUTOMATED (deriveIfTypeFields). LIVE 2026-10-10 (OXC_LOG [iface], bank opened and closed by the builder):
+// open, the bank's counter ran 7-8 behind the chatbox's and its first component was 512x730; closed but loaded,
+// the counter sat at 0 and the component was 0x0. Used by groupVisible (game.hpp) with the size as the main
+// signal. (An earlier reading that it "stayed 0 while open" came from a run with no [iface] line while open.)
+inline std::uintptr_t IFTYPE_LAST_PROCESS = 0x38;   // int
 inline std::uintptr_t IFTYPE_CHILDREN_COUNT = 0xB50;  // u64
 inline std::uintptr_t IFTYPE_CHILDREN_DATA  = 0xB58;  // -> 16-byte shared_ptr entries
 inline std::uintptr_t IFTYPE_TEXT         = 0x158;  // inline-or-char* string; flag:
@@ -856,6 +907,18 @@ inline int            IFTYPE_CHAIN_MAX = 16;     // depth cap on any parent walk
 // and a cardinal 0/512/1024/1536 at 0x3E0; coords at 0x3F0/0x418 match npcCoord's disasm exactly.
 inline std::uintptr_t ENTITY_ANIMATION   = 0x4D8;  // current animation id, -1 when idle
 inline std::uintptr_t ENTITY_ORIENTATION = 0x3E0;  // 0..2047, 0 = south, rising clockwise
+
+// Who an actor is fighting (or talking to): the uid of its target, -1 for none. On YOUR player it is the
+// NPC you are attacking; on an NPC attacking you it is your player handle (LOCAL_PLAYER_IDX). A plain uid --
+// no +0x8000 / +0x10000 "is a player" encoding was seen. VERIFIED LIVE on client-241-3, 2026-10-09
+// (client/combatprobe.hpp, gradlew debugRun -Pcombat): attacking a Chicken, your +0x3A8 held the chicken's
+// uid and the chicken's held 1805 (your handle); standing still, yours went back to -1; a Goblin attacking
+// you held 1805 while your hitpoints fell 10 -> 5. Nothing else matched on both sides.
+// DERIVED (DeriveOffsets.deriveActorTarget): the actor constructor (0x9dcd0 on 241-3) stores 0x300 at
+// +0x3A4 and then -1 as three qwords at +0x3A8, +0x3B0, +0x3B8; the target is the first. The same four
+// stores occur once more (0x1db9b0, a small function); the constructor is the one that also writes
+// 0xFFFF0000 to several fields.
+inline std::uintptr_t ENTITY_TARGET      = 0x3A8;  // uid of the actor's target, -1 for none
 
 // Combat level, on a PLAYER entity. NPCs keep theirs on the shared definition instead -- reading this
 // on an NPC live returned a pointer fragment (the high half of a heap address), never a level. On the

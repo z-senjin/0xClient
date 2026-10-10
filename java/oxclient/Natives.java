@@ -140,6 +140,15 @@ public final class Natives {
     /** An item's five ground options, newline-separated (option n is line n), or "" when not cached. */
     public static native String itemGroundOptions(int id);
 
+    /** An item's five INVENTORY options ("Wield", "Eat", "Drop"), newline-separated; "" when not cached. */
+    public static native String itemInventoryOptions(int id);
+
+    /** {equipment slot, second slot it blocks}, -1 for none; {-2, -2} when the definition is not cached. */
+    public static native int[] itemSlot(int id);
+
+    /** The five options of the NPC with this uid ("Attack", "Talk-to"), newline-separated; "" when gone. */
+    public static native String npcOptions(int uid);
+
     /** Option {@code op} (1..5) on a ground item stack at a SCENE tile. Queued; false when dropped. */
     public static native boolean groundItemAction(int sceneX, int sceneY, int id, int quantity, int op);
 
@@ -150,6 +159,21 @@ public final class Natives {
      * Queued; false when dropped.
      */
     public static native boolean useItemOn(int kind, int srcWidget, int srcSlot, int srcItem, int tx, int ty, int targetId);
+
+    /**
+     * Continue a dialogue, or pick a dialogue option: what the client sends when that component is clicked
+     * ({@code widgetId} packed, {@code slot} the child index or -1). Queued; false when dropped.
+     */
+    public static native boolean resumeDialog(int widgetId, int slot);
+
+    /** Is the interface group on screen -- processed this frame, not just loaded (IFTYPE_LAST_PROCESS)? */
+    public static native boolean groupVisible(int group);
+
+    /**
+     * Combat around you: {the uid of the actor you are interacting with (attacking -- or fishing, talking) or -1,
+     * then the uid of every NPC whose target is you}. ENTITY_TARGET, verified live on 241-3.
+     */
+    public static native int[] combat();
 
     /** A varbit as of the last frame, or -1 until it has been read once (the first call registers it). */
     public static native int varbit(int id);

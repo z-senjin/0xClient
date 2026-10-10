@@ -138,18 +138,33 @@ inline std::string locName(int id) {
     return def ? nxtString(def + off::LOCDEF_NAME) : std::string{};
 }
 
-/// A loc's five right-click options as the definition names them ("Chop down", "Bank", "Open"); option n
-/// is [n-1], "" where it has none or the definition is not cached. The definition's conditional
-/// overrides (an option renamed by a game variable) are not applied -- the base text is returned.
-inline std::array<std::string, 5> locOptions(int id) {
+/// Five options from a definition's options vector (begin/end pointers at `vec`, 0x40-byte entries with the
+/// text first) -- the shape loc, item-inventory and NPC definitions share. "" where there is none.
+inline std::array<std::string, 5> opsVector(std::uintptr_t vec) {
     std::array<std::string, 5> out{};
-    const std::uintptr_t def = locDef(id);
-    if (!def || !off::LOCDEF_OPS) return out;
-    const std::uintptr_t begin = rdp(def + off::LOCDEF_OPS), end = rdp(def + off::LOCDEF_OPS + 8);
+    const std::uintptr_t begin = rdp(vec), end = rdp(vec + 8);
     if (!begin || end < begin || (end - begin) % LOCDEF_OP_STRIDE || end - begin > 16 * LOCDEF_OP_STRIDE) return out;
     const int n = static_cast<int>((end - begin) / LOCDEF_OP_STRIDE);
     for (int i = 0; i < n && i < 5; ++i) out[i] = nxtString(begin + static_cast<std::uintptr_t>(i) * LOCDEF_OP_STRIDE, 60);
     return out;
+}
+
+/// A loc's five right-click options as the definition names them ("Chop down", "Bank", "Open"); option n
+/// is [n-1], "" where it has none or the definition is not cached. The definition's conditional
+/// overrides (an option renamed by a game variable) are not applied -- the base text is returned.
+inline std::array<std::string, 5> locOptions(int id) {
+    const std::uintptr_t def = locDef(id);
+    if (!def || !off::LOCDEF_OPS) return {};
+    return opsVector(def + off::LOCDEF_OPS);
+}
+
+/// An NPC's five options ("Attack", "Talk-to", "Net"), from the definition its entity points at (offsets.hpp
+/// NPCDEF_OPS); option n is [n-1]. Pass the NPC's entity address.
+inline std::array<std::string, 5> npcOptions(std::uintptr_t entity) {
+    if (!entity || !off::NPCDEF_OPS) return {};
+    const std::uintptr_t def = rdp(entity + off::ENTITY_DEF_PTR);
+    if (!def) return {};
+    return opsVector(def + off::NPCDEF_OPS);
 }
 
 }  // namespace oxc

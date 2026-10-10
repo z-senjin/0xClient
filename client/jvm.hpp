@@ -115,7 +115,7 @@ inline jboolean JNICALL nReady(JNIEnv*, jclass) {
 /// stutter you then spend an evening profiling. Java unpacks it into records once.
 inline jintArray JNICALL nEntities(JNIEnv* env, jclass) {
     std::vector<jint> flat;
-    flat.reserve(256 * 10);
+    flat.reserve(256 * 11);
     forEachEntity([&](const Entity& e) {
         // The kind comes from the table the walker found the node in (Entity::player), not from a
         // per-entity scan of PLAYER_IDS: that scan was (#entities x #players) VirtualQuery'd reads
@@ -133,6 +133,7 @@ inline jintArray JNICALL nEntities(JNIEnv* env, jclass) {
         flat.push_back(e.fineX);
         flat.push_back(e.fineH);
         flat.push_back(e.fineY);
+        flat.push_back(e.target);           // uid of whoever it is fighting, -1 (offsets.hpp ENTITY_TARGET)
     });
     jintArray arr = env->NewIntArray(static_cast<jsize>(flat.size()));
     if (arr && !flat.empty()) env->SetIntArrayRegion(arr, 0, static_cast<jsize>(flat.size()), flat.data());
@@ -564,13 +565,34 @@ inline jintArray JNICALL nItemInfo(JNIEnv* env, jclass, jint id) {
     return arr;
 }
 
-/// An item's five ground options, newline-separated (like locOptions), or "" when not cached.
-inline jstring JNICALL nItemGroundOptions(JNIEnv* env, jclass, jint id) {
-    const auto ops = itemGroundOptions(id);
+/// Five options newline-separated (like locOptions), or "" when all are empty.
+inline jstring joinOptions(JNIEnv* env, const std::array<std::string, 5>& ops) {
     std::string joined;
     bool any = false;
     for (int i = 0; i < 5; ++i) { if (i) joined += '\n'; joined += ops[i]; any = any || !ops[i].empty(); }
     return gameBytesToJString(env, any ? joined : std::string{});
+}
+
+/// An item's five ground options ("Take"), or "" when not cached.
+inline jstring JNICALL nItemGroundOptions(JNIEnv* env, jclass, jint id) { return joinOptions(env, itemGroundOptions(id)); }
+
+/// An item's five inventory options ("Wield", "Eat", "Drop"), or "" when not cached.
+inline jstring JNICALL nItemInventoryOptions(JNIEnv* env, jclass, jint id) { return joinOptions(env, itemInventoryOptions(id)); }
+
+/// {equipment slot, second slot}, -1 for none, {-2, -2} when not cached.
+inline jintArray JNICALL nItemSlot(JNIEnv* env, jclass, jint id) {
+    const auto v = itemSlot(id);
+    jint out[2] = {v[0], v[1]};
+    jintArray arr = env->NewIntArray(2);
+    if (arr) env->SetIntArrayRegion(arr, 0, 2, out);
+    return arr;
+}
+
+/// The options of the NPC with this uid ("Attack", "Talk-to"), or "" when it is gone or has none.
+inline jstring JNICALL nNpcOptions(JNIEnv* env, jclass, jint uid) {
+    bool found = false;
+    const Entity e = findEntity(uid, false, found);
+    return found ? joinOptions(env, npcOptions(e.addr)) : gameBytesToJString(env, std::string{});
 }
 
 /// Option `op` (1..5) on a ground item stack at SCENE tile (sx, sy). Queued; false when dropped.
@@ -583,6 +605,27 @@ inline jboolean JNICALL nUseItemOn(JNIEnv*, jclass, jint kind, jint sw, jint ss,
     return useItemOn(kind, sw, ss, si, tx, ty, tid) ? JNI_TRUE : JNI_FALSE;
 }
 
+/// Continue a dialogue or pick an option (actions.hpp, resumeDialog). Queued; false when dropped.
+inline jboolean JNICALL nResumeDialog(JNIEnv*, jclass, jint widgetId, jint slot) {
+    return resumeDialog(widgetId, slot) ? JNI_TRUE : JNI_FALSE;
+}
+
+/// Combat around you: {the uid of the NPC you are attacking or -1, then the uid of every NPC whose target is
+/// you}. ENTITY_TARGET (offsets.hpp) on each actor; read-only, any thread.
+inline jintArray JNICALL nCombat(JNIEnv* env, jclass) {
+    std::vector<jint> out{-1};
+    const int me = localPlayerUid();
+    if (me >= 0) {
+        forEachEntity([&](const Entity& e) {
+            if (e.player && e.uid == me) out[0] = e.target;
+            else if (!e.player && e.target == me) out.push_back(e.uid);
+        });
+    }
+    jintArray a = env->NewIntArray(static_cast<jsize>(out.size()));
+    if (a) env->SetIntArrayRegion(a, 0, static_cast<jsize>(out.size()), out.data());
+    return a;
+}
+
 /// A varbit, read by the client's own reader on the game thread; -1 until the first read (actions.hpp).
 inline jint JNICALL nVarbit(JNIEnv*, jclass, jint id) {
     return (id < 0 || id > 65535) ? -1 : varbit(id);
@@ -592,6 +635,40 @@ inline jint JNICALL nVarbit(JNIEnv*, jclass, jint id) {
 /// "component child hidden text" (child -1 for the component itself, hidden 0/1). "" when the group is not
 /// loaded. This is how Java reads dialogues, the chatbox's game messages and the Grand Exchange's labels
 /// without a coordinate: by the text the client already holds (IFTYPE_TEXT, verified on 241-3).
+/// Is this interface group on screen (offsets.hpp IFTYPE_LAST_PROCESS), not just loaded? Every 10 s the OXC_LOG
+/// gets an [iface] line with the bank's, the exchange's, the chatbox's and the inventory's counters next to the
+/// newest, so a run shows whether the counter tells open from closed.
+inline jboolean JNICALL nGroupVisible(JNIEnv*, jclass, jint group) {
+    return groupVisible(group) ? JNI_TRUE : JNI_FALSE;
+}
+
+/// OXC_LOG only, every 10 s: candidates for "this interface is ON SCREEN" for the bank (12), the bank's
+/// inventory panel (15), the exchange (465) and the chatbox (162) -- how many of each group's components are
+/// not hidden, component 0's hidden flag and size, and the processed counter. Opening and closing the bank
+/// during a run shows which of these changes with it. (The processed counter alone did not: 2026-10-10.)
+inline void ifaceDiagnostic() {
+    static DWORD logged = 0;
+    if (!::getenv("OXC_LOG") || GetTickCount() - logged < 10000) return;
+    logged = GetTickCount();
+    std::string line = "[iface]";
+    for (int g : {12, 15, 465, 162}) {
+        int total = 0, shown = 0;
+        for (int c = 0; c < 1024; ++c) {                // widgetObj returns 0 past the group's last component
+            const std::uintptr_t w = widgetObj((g << 16) | c);
+            if (!w) continue;
+            ++total;
+            if (rd<std::uint8_t>(w + off::IFTYPE_HIDDEN) == 0) ++shown;
+        }
+        const std::uintptr_t root = widgetObj(g << 16);
+        char b[160];
+        std::snprintf(b, sizeof b, "  %d: shown %d/%d root(hidden=%d %dx%d) proc=%d", g, shown, total,
+                      root ? rd<std::uint8_t>(root + off::IFTYPE_HIDDEN) : -1, root ? rd<std::int32_t>(root + off::IFTYPE_WIDTH) : 0,
+                      root ? rd<std::int32_t>(root + off::IFTYPE_HEIGHT) : 0, groupProcessed(g)[0]);
+        line += b;
+    }
+    oxc::logf("%s\n", line.c_str());
+}
+
 inline jstring JNICALL nGroupText(JNIEnv* env, jclass, jint group) {
     std::string out;
     if (group < 0 || group > 0xFFFF) return gameBytesToJString(env, out);
@@ -1383,6 +1460,7 @@ inline jintArray JNICALL nWorldMap(JNIEnv* env, jclass) {
 /// client itself uses (a group's data is built on demand when its interface opens). Bounded by the
 /// same 0x1000 group-count ceiling as the widget lookup.
 inline jintArray JNICALL nLoadedGroups(JNIEnv* env, jclass) {
+    ifaceDiagnostic();
     std::vector<jint> ids;
     std::uintptr_t c = clientObj();
     if (c) {
@@ -1538,10 +1616,16 @@ inline bool startJvm(const std::wstring& javaHome, const std::wstring& jarPath, 
         { const_cast<char*>("itemName"),    const_cast<char*>("(I)Ljava/lang/String;"), reinterpret_cast<void*>(nItemName) },
         { const_cast<char*>("itemInfo"),    const_cast<char*>("(I)[I"),   reinterpret_cast<void*>(nItemInfo) },
         { const_cast<char*>("itemGroundOptions"), const_cast<char*>("(I)Ljava/lang/String;"), reinterpret_cast<void*>(nItemGroundOptions) },
+        { const_cast<char*>("itemInventoryOptions"), const_cast<char*>("(I)Ljava/lang/String;"), reinterpret_cast<void*>(nItemInventoryOptions) },
+        { const_cast<char*>("itemSlot"),    const_cast<char*>("(I)[I"),   reinterpret_cast<void*>(nItemSlot) },
+        { const_cast<char*>("npcOptions"),  const_cast<char*>("(I)Ljava/lang/String;"), reinterpret_cast<void*>(nNpcOptions) },
         { const_cast<char*>("groundItemAction"), const_cast<char*>("(IIIII)Z"), reinterpret_cast<void*>(nGroundItemAction) },
         { const_cast<char*>("useItemOn"),   const_cast<char*>("(IIIIIII)Z"), reinterpret_cast<void*>(nUseItemOn) },
+        { const_cast<char*>("resumeDialog"), const_cast<char*>("(II)Z"), reinterpret_cast<void*>(nResumeDialog) },
         { const_cast<char*>("varbit"),      const_cast<char*>("(I)I"),    reinterpret_cast<void*>(nVarbit) },
+        { const_cast<char*>("combat"),      const_cast<char*>("()[I"),    reinterpret_cast<void*>(nCombat) },
         { const_cast<char*>("groupText"),   const_cast<char*>("(I)Ljava/lang/String;"), reinterpret_cast<void*>(nGroupText) },
+        { const_cast<char*>("groupVisible"), const_cast<char*>("(I)Z"),   reinterpret_cast<void*>(nGroupVisible) },
         { const_cast<char*>("viewport"),    const_cast<char*>("()[I"),    reinterpret_cast<void*>(nViewport) },
         { const_cast<char*>("input"),       const_cast<char*>("()[I"),    reinterpret_cast<void*>(nInput) },
         { const_cast<char*>("mouse"),       const_cast<char*>("()[I"),    reinterpret_cast<void*>(nMouse) },

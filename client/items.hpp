@@ -96,16 +96,32 @@ inline std::array<int, 2> itemInfo(int id) {
     return {rd<std::int32_t>(def + off::ITEMDEF_STACKABLE) == 1 ? 1 : 0, rd<std::int32_t>(def + off::ITEMDEF_COST)};
 }
 
-/// The item's five ground options ("Take" is usually one of them); option n is [n-1].
+/// The item's five GROUND options ("Take" is usually the third); option n is [n-1]. (offsets.hpp ITEMDEF_OPS:
+/// a vector of 0x40-byte entries, like a loc's)
 inline std::array<std::string, 5> itemGroundOptions(int id) {
+    const std::uintptr_t def = itemDef(id);
+    if (!def || !off::ITEMDEF_OPS) return {};
+    return opsVector(def + off::ITEMDEF_OPS);
+}
+
+/// The item's five INVENTORY options ("Wield", "Eat", "Drop"); option n is [n-1]. (offsets.hpp ITEMDEF_IOPS:
+/// a pointer to five consecutive 24-byte NxtStrings)
+inline std::array<std::string, 5> itemInventoryOptions(int id) {
     std::array<std::string, 5> out{};
     const std::uintptr_t def = itemDef(id);
-    if (!def || !off::ITEMDEF_GROUND_OPS) return out;
-    const std::uintptr_t begin = rdp(def + off::ITEMDEF_GROUND_OPS), end = rdp(def + off::ITEMDEF_GROUND_OPS + 8);
-    if (!begin || end < begin || (end - begin) % LOCDEF_OP_STRIDE || end - begin > 16 * LOCDEF_OP_STRIDE) return out;
-    const int n = static_cast<int>((end - begin) / LOCDEF_OP_STRIDE);
-    for (int i = 0; i < n && i < 5; ++i) out[i] = nxtString(begin + static_cast<std::uintptr_t>(i) * LOCDEF_OP_STRIDE, 60);
+    if (!def || !off::ITEMDEF_IOPS) return out;
+    const std::uintptr_t arr = rdp(def + off::ITEMDEF_IOPS);
+    if (!arr || !readable(arr, 5 * 0x18)) return out;
+    for (int i = 0; i < 5; ++i) out[i] = nxtString(arr + static_cast<std::uintptr_t>(i) * 0x18, 60);
     return out;
+}
+
+/// {the equipment slot the item is worn in (-1 none), a second slot it blocks (-1 none)}; {-2, -2} when the
+/// definition is not cached. (offsets.hpp ITEMDEF_SLOT / ITEMDEF_SLOT2)
+inline std::array<int, 2> itemSlot(int id) {
+    const std::uintptr_t def = itemDef(id);
+    if (!def) return {-2, -2};
+    return {rd<std::int32_t>(def + off::ITEMDEF_SLOT, -1), rd<std::int32_t>(def + off::ITEMDEF_SLOT2, -1)};
 }
 
 }  // namespace oxc

@@ -41,9 +41,27 @@ public final class Items {
     /** The item's shop value in coins, or -1 when unknown right now. */
     public static int value(int id) { return Natives.itemInfo(id)[1]; }
 
-    /** The five ground options ("Take" is usually one); option n is {@code [n-1]}, "" where none. */
-    public static String[] groundOptions(int id) {
-        String raw = Natives.itemGroundOptions(id);
+    /** The five ground options ("Take" is usually the third); option n is {@code [n-1]}, "" where none. */
+    public static String[] groundOptions(int id) { return split(Natives.itemGroundOptions(id)); }
+
+    /** The five inventory options ("Wield", "Eat", "Bury", "Drop"); option n is {@code [n-1]}, "" where none. */
+    public static String[] inventoryOptions(int id) { return split(Natives.itemInventoryOptions(id)); }
+
+    /** Which inventory option (0..4) is named {@code text}, ignoring case; -1 when none is. */
+    public static int inventoryOption(int id, String text) {
+        String[] ops = inventoryOptions(id);
+        for (int i = 0; i < ops.length; i++) if (ops[i].equalsIgnoreCase(text)) return i;
+        return -1;
+    }
+
+    /** The equipment slot the item is worn in ({@link Equipment} numbering), -1 when it is not worn, -2 unknown. */
+    public static int slot(int id) { return Natives.itemSlot(id)[0]; }
+
+    /** A second slot the item blocks (5, the shield, for a two-handed weapon), or -1. */
+    public static int slot2(int id) { return Natives.itemSlot(id)[1]; }
+
+    /** Five options from a newline-separated native string. */
+    static String[] split(String raw) {
         String[] out = {"", "", "", "", ""};
         if (raw == null || raw.isEmpty()) return out;
         String[] parts = raw.split("\n", -1);

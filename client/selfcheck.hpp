@@ -220,9 +220,10 @@ inline void checkEntities(Results& r, const Entity& me) {
     r.add({"ENTITY_PLANE"}, (p4 >= 0 && p4 <= 3) ? "plausible" : "fail", fmt("read %d", p4));
 
     // Orientation and animation over every entity: the right shape everywhere, and not all zero.
-    int n = 0, orientOk = 0, orientNonZero = 0, animOk = 0;
+    int n = 0, orientOk = 0, orientNonZero = 0, animOk = 0, targetOk = 0;
     forEachEntity([&](const Entity& x) {
         ++n;
+        if (x.target >= -1 && x.target < 0x10000) ++targetOk;
         if (x.orientation >= 0 && x.orientation < 2048) ++orientOk;
         if (x.orientation != 0) ++orientNonZero;
         if (x.animation >= -1 && x.animation < 20000) ++animOk;
@@ -230,6 +231,7 @@ inline void checkEntities(Results& r, const Entity& me) {
     r.add({"ENTITY_ORIENTATION"}, (n && orientOk == n && orientNonZero) ? "plausible" : "fail",
           fmt("%d of %d entities in 0..2047, %d nonzero", orientOk, n, orientNonZero));
     r.add({"ENTITY_ANIMATION"}, (n && animOk == n) ? "plausible" : "fail", fmt("%d of %d entities -1 or a sequence id", animOk, n));
+    r.add({"ENTITY_TARGET"}, (n && targetOk == n) ? "plausible" : "fail", fmt("%d of %d entities -1 or a uid (a fight shows the rest: -Pcombat)", targetOk, n));
 }
 
 inline void checkNames(Results& r, const Entity& me) {
@@ -439,8 +441,8 @@ inline void checkScenery(Results& r, const Entity& me) {
 // or name offset reads no names. Coins (995), when carried, must read stackable. Ground items: a wrong
 // list layout finds nothing or garbage ids; one found whose name is cached is a pass, none is a skip.
 inline void checkItems(Results& r, const Entity& me) {
-    int carried = 0, named = 0, coinsStack = -2;
-    std::string sample;
+    int carried = 0, named = 0, coinsStack = -2, iopsOk = 0, opsOk = 0, slotOk = 0;
+    std::string sample, iopsSample;
     const int size = containerSize(93);
     for (int i = 0; i < size && i < 28; ++i) {
         const int id = containerItem(93, i);
@@ -449,9 +451,37 @@ inline void checkItems(Results& r, const Entity& me) {
         const std::string n = itemName(id);
         if (!n.empty()) { ++named; if (named <= 3) sample += fmt("%s%d=%s", sample.empty() ? "" : ", ", id, n.c_str()); }
         if (id == 995) coinsStack = itemInfo(id)[0];
+        const auto io = itemInventoryOptions(id), go = itemGroundOptions(id);
+        bool drop = false, take = false;
+        for (const auto& o : io) drop = drop || o == "Drop" || o == "Destroy";
+        for (const auto& o : go) take = take || o == "Take";
+        if (drop) ++iopsOk;
+        if (take) ++opsOk;
+        const int slot = itemSlot(id)[0];
+        if (slot >= -1 && slot < 14) ++slotOk;
+        if (iopsSample.empty() && !io[0].empty() + !io[1].empty() + !io[2].empty() + !io[3].empty() + !io[4].empty() > 0)
+            iopsSample = fmt("%s: %s/%s/%s/%s/%s", n.c_str(), io[0].c_str(), io[1].c_str(), io[2].c_str(), io[3].c_str(), io[4].c_str());
     }
     if (carried == 0) r.add({"ITEMDEF_CACHE", "ITEMDEF_NAME"}, "skip", "nothing in the inventory to name");
     else r.add({"ITEMDEF_CACHE", "ITEMDEF_NAME"}, named == carried ? "pass" : "fail", fmt("%d of %d carried items named: %s", named, carried, sample.c_str()));
+    if (carried) {
+        r.add({"ITEMDEF_IOPS"}, iopsOk == carried ? "pass" : "fail", fmt("%d of %d carried items offer Drop/Destroy; %s", iopsOk, carried, iopsSample.c_str()));
+        r.add({"ITEMDEF_OPS"}, opsOk * 2 >= carried && opsOk > 0 ? "pass" : "fail", fmt("%d of %d carried items have Take on the ground", opsOk, carried));
+        r.add({"ITEMDEF_SLOT", "ITEMDEF_SLOT2"}, slotOk == carried ? "plausible" : "fail", fmt("%d of %d carried items have a slot in -1..13", slotOk, carried));
+    }
+    {
+        int npcs = 0, withOps = 0;
+        std::string ns;
+        forEachEntity([&](const Entity& e) {
+            if (e.player || npcs >= 40) return;
+            ++npcs;
+            const auto o = npcOptions(e.addr);
+            bool any = false;
+            for (const auto& x : o) any = any || (!x.empty() && printable(x) && x.size() < 30);
+            if (any) { ++withOps; if (ns.size() < 80) ns += fmt("%s%s: %s %s", ns.empty() ? "" : "; ", npcName(e.addr).c_str(), o[0].c_str(), o[1].c_str()); }
+        });
+        r.add({"NPCDEF_OPS"}, npcs == 0 ? "skip" : withOps * 2 >= npcs ? "pass" : "fail", fmt("%d of %d NPCs have readable options: %s", withOps, npcs, ns.c_str()));
+    }
     if (coinsStack == -2) r.add({"ITEMDEF_STACKABLE"}, "skip", "no coins in the inventory to test");
     else r.add({"ITEMDEF_STACKABLE"}, coinsStack == 1 ? "pass" : "fail", fmt("coins read stackable=%d", coinsStack));
 
@@ -572,7 +602,7 @@ public:
         checkItems(r, me);
         r.add({"DO_ACTION", "OPLOC1", "OPNPC1", "OPNPC2", "OPNPC3", "OPNPC4", "OPNPC5", "OP_WALK",
                "PENDING_ACTION_PACKED_ID", "PENDING_ACTION_INDEX", "PENDING_ACTION_TARGET", "PENDING_ACTION_SEQ",
-               "PENDING_ACTION_PENDING", "ACT_IF_OP", "ACT_OBJ_OP", "ACT_ON_ITEM", "ACT_ON_LOC", "ACT_ON_NPC", "ACT_ON_OBJ",
+               "PENDING_ACTION_PENDING", "ACT_IF_OP", "ACT_OBJ_OP", "ACT_RESUME", "ACT_ON_ITEM", "ACT_ON_LOC", "ACT_ON_NPC", "ACT_ON_OBJ",
                "TARGET_STATE", "TARGET_SEL", "SEL_WIDGET", "SEL_SLOT", "SEL_ITEM"},
               "skip", "not checkable by reading: needs a hook-and-log against a real click");
         write(dllDir, r);
