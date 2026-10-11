@@ -25,10 +25,10 @@ public final class Natives {
      * the last three are the rendered position in fine units (128/tile) and the ground height under
      * it (client height axis, negative = up), live on client-240-6.
      *
-     * <p>{@code id} is the NPC type for NPCs. For players it is always {@code -1} on this build: the
-     * combat-level offset we had is wrong on client-240-6 (it read pointer garbage, not a level) and
-     * has been gated off pending re-derivation -- see {@code PLAYER_COMBAT_LEVEL} in
-     * {@code client/offsets.hpp}. Treat -1 as "combat level unavailable", never as a level.</p>
+     * <p>{@code id} is the NPC type for NPCs. For players it is the combat level, read off the client's
+     * appearance decoder ({@code PLAYER_COMBAT_LEVEL} in {@code client/offsets.hpp}, derived on
+     * client-241-3, not verified live); the native sends {@code -1} for anything outside 3..126. Treat
+     * -1 as "combat level unavailable", never as a level.</p>
      */
     public static native int[] entities();
 

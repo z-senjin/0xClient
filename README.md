@@ -557,7 +557,8 @@ did (`tools/wine_inject.exe` does the injecting on Linux). Same plugins, same se
 
 More on all of this: [`docs/architecture-after.md`](docs/architecture-after.md) is the architecture
 map, [`docs/plugin-system.md`](docs/plugin-system.md) covers plugins, config, profiles and the hub,
-and [`docs/testing.md`](docs/testing.md) is what is tested and how to verify the rest by hand.
+[`docs/scripting-api.md`](docs/scripting-api.md) is the one-page guide to writing scripts against
+`oxclient.api`, and [`docs/testing.md`](docs/testing.md) is what is tested and how to verify the rest by hand.
 
 The overlay is a **transparent always-on-top window**, not a renderer hook. Hooking would need a detour
 library, a graphics API to get right, and it crashes inside someone else's render loop when you get it

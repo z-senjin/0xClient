@@ -33,7 +33,7 @@ public final class Scenery {
     public static final int LAYER_GAME_OBJECT = 2;
 
     /** One object: its loc id, origin tile and layer. */
-    public record SceneObject(int id, int sceneX, int sceneY, int layer) {
+    public record SceneObject(int id, int sceneX, int sceneY, int layer) implements Interactable, Located {
         public int worldX() { return Game.sceneBaseX() + sceneX; }
 
         public int worldY() { return Game.sceneBaseY() + sceneY; }
@@ -41,23 +41,25 @@ public final class Scenery {
         public boolean isWall() { return layer == LAYER_WALL; }
 
         /** "Tree", "Bank booth"... or "" when the client has not cached its definition right now. */
-        public String name() { return Scenery.name(id); }
+        @Override public String name() { return Scenery.name(id); }
 
         /** Its right-click options; option n is {@code [n-1]}, "" where there is none. */
-        public String[] options() { return Scenery.options(id); }
-
-        /** The option number (1..5) whose text is {@code text}, ignoring case, or -1. */
-        public int option(String text) {
-            String[] ops = options();
-            for (int i = 0; i < ops.length; i++) if (ops[i].equalsIgnoreCase(text)) return i + 1;
-            return -1;
-        }
+        @Override public String[] options() { return Scenery.options(id); }
 
         /** Take option {@code op} (1..5) on it. False when the action was dropped. */
-        public boolean interact(int op) { return Natives.objectAction(sceneX, sceneY, id, op); }
+        @Override public boolean interact(int op) { return Natives.objectAction(sceneX, sceneY, id, op); }
+
+        /** Where it stands: its origin (south-west) tile. */
+        @Override public WorldPoint location() { return new WorldPoint(worldX(), worldY()); }
+
+        /**
+         * True while it is still there. A felled tree becomes a stump and a mined rock an empty one -- a
+         * different id on the same tile -- so this is how a script knows its target is gone.
+         */
+        public boolean exists() { return Scenery.exists(id, sceneX, sceneY); }
 
         /** Tile distance from you (the larger of the x and y gaps). */
-        public int distance() {
+        @Override public int distance() {
             Local me = Game.me();
             return Math.max(Math.abs(sceneX - me.sceneX()), Math.abs(sceneY - me.sceneY()));
         }
@@ -68,6 +70,21 @@ public final class Scenery {
     private static final Map<Integer, String> NAMES = new ConcurrentHashMap<>();
     private static final Map<Integer, String[]> OPTIONS = new ConcurrentHashMap<>();
     private static final String[] NO_OPTIONS = {"", "", "", "", ""};
+
+    /** How far {@link #query()} looks when not told: about what is on screen at the default zoom. */
+    public static final int DEFAULT_RADIUS = 20;
+
+    /**
+     * Start a search over the scenery within {@link #DEFAULT_RADIUS} tiles:
+     * {@code Scenery.query().named("Oak tree").nearest()}. See {@link SceneryQuery}.
+     */
+    public static SceneryQuery query() { return query(DEFAULT_RADIUS); }
+
+    /** Start a search over the scenery within {@code radius} tiles of you. */
+    public static SceneryQuery query(int radius) { return new SceneryQuery(() -> all(radius)); }
+
+    /** The closest object named exactly {@code name} (ignoring case) within {@link #DEFAULT_RADIUS}, or null. */
+    public static SceneObject nearest(String name) { return query().named(name).nearest(); }
 
     /** Everything within {@code radius} tiles of you, on your floor. Empty before you spawn. */
     public static List<SceneObject> all(int radius) {

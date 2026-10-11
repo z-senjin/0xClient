@@ -188,4 +188,16 @@ public class ActorTableTest
 		assertEquals(0, a.getCombatLevel());
 		assertEquals(1, a.getComposition().getSize());
 	}
+
+	@Test
+	public void anotherPlayersCombatLevelIsTheIdSlotWhenItIsALevel()
+	{
+		Entity real = EntityTestSupport.of(11, 30, 30, true, 87, -1, 0, 0, 0, 0);
+		Entity unread = EntityTestSupport.of(12, 31, 31, true, -1, -1, 0, 0, 0, 0);
+		Entity garbage = EntityTestSupport.of(13, 32, 32, true, 4096, -1, 0, 0, 0, 0);
+		ActorTable.refreshFrom(List.of(), List.of(real, unread, garbage), false, 1);
+		assertEquals(87, ActorTable.playerByUid(11).getCombatLevel());
+		assertEquals(0, ActorTable.playerByUid(12).getCombatLevel());
+		assertEquals(0, ActorTable.playerByUid(13).getCombatLevel());
+	}
 }

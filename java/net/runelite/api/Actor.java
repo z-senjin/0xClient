@@ -103,15 +103,15 @@ public abstract class Actor
 	}
 
 	/**
-	 * 0 = "no combat level", upstream's own convention. PLAYER_COMBAT_LEVEL (client/offsets.hpp) is
-	 * wrong on this build and no NPC definition level offset has been derived.
+	 * 0 = "no combat level", upstream's own convention. Player overrides this (PLAYER_COMBAT_LEVEL,
+	 * client/offsets.hpp); for an NPC the level lives on its definition, and no offset for that has
+	 * been derived.
 	 */
 	public int getCombatLevel()
 	{
-		gap("Actor.getCombatLevel", "reads 0, upstream's \"no combat level\" sentinel, for every actor."
-			+ " PLAYER_COMBAT_LEVEL in client/offsets.hpp read pointer garbage on client-240-6 and is"
-			+ " gated off, and no NPC-definition level offset has been derived. Never read a 0 here as"
-			+ " a level 0 monster");
+		gap("Actor.getCombatLevel", "reads 0, upstream's \"no combat level\" sentinel, for every NPC:"
+			+ " the level lives on the NPC definition and no offset for it has been derived. Never read a"
+			+ " 0 here as a level 0 monster");
 		return 0;
 	}
 
@@ -136,8 +136,9 @@ public abstract class Actor
 	}
 
 	/**
-	 * The plane is the LOCAL PLAYER's: nEntities exports no per-entity plane (ENTITY_PLANE is
-	 * SUSPECT, client/offsets.hpp), so an NPC on the floor above reports your floor. Documented
+	 * The plane is the LOCAL PLAYER's: nEntities exports no per-entity plane (the native reads one,
+	 * ENTITY_PLANE_COORD in client/offsets.hpp, but does not send it), so an NPC on the floor above
+	 * reports your floor. Documented
 	 * limitation of the first cut, not a bug to paper over here.
 	 */
 	public WorldPoint getWorldLocation()

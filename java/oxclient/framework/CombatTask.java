@@ -3,7 +3,6 @@ package oxclient.framework;
 import java.util.ArrayList;
 import java.util.List;
 
-import oxclient.api.Actions;
 import oxclient.api.Combat;
 import oxclient.api.CombatStyle;
 import oxclient.api.Dialog;
@@ -257,7 +256,7 @@ public final class CombatTask extends BaseTask implements Spotted {
                 approach = null;
                 if (t != null && st != Walker.Status.NO_ROUTE && st != Walker.Status.STUCK) {
                     state("attacking " + t.name());
-                    if (!Actions.npc(t, "Attack")) Actions.npc(t, 2);
+                    if (!t.interact("Attack")) t.interact(2);
                     attackedAt = now;
                     sleep(now, 1200, 1800);
                 } else if (t != null) {
@@ -383,7 +382,7 @@ public final class CombatTask extends BaseTask implements Spotted {
             Spells.cast(s, best);
         } else {
             state("attacking " + best.name());
-            if (!Actions.npc(best, "Attack")) Actions.npc(best, 2);    // "Attack" is option 2 on most monsters
+            if (!best.interact("Attack")) best.interact(2);    // "Attack" is option 2 on most monsters
         }
         attackedAt = now;
         sleep(now, 1500, 2200);

@@ -57,6 +57,20 @@ public class Player extends Actor
 		return local != null;
 	}
 
+	/**
+	 * Another player's level comes from the game (nEntities carries it in the id slot, read off the
+	 * client's appearance decoder -- PLAYER_COMBAT_LEVEL in client/offsets.hpp, derived on client-241-3,
+	 * not verified live); yours is computed from your stats. Anything outside 3..126 is not a level and
+	 * reads 0, upstream's "no combat level".
+	 */
+	@Override
+	public int getCombatLevel()
+	{
+		Entity e = last;
+		int level = isLocal() ? oxclient.api.Skills.combatLevel() : (e == null ? -1 : e.id());
+		return level >= 3 && level <= 126 ? level : 0;
+	}
+
 	// -- primitives ---------------------------------------------------------------------------------------
 
 	@Override

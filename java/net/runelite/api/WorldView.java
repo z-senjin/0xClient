@@ -40,8 +40,8 @@ public class WorldView
 		return Game.sceneBaseY();
 	}
 
-	/** 0..3. The native reads the plane off a SUSPECT offset (ENTITY_PLANE, see client/offsets.hpp)
-	 *  and range-guards it to -1 = unknown; this shim assumes the GROUND FLOOR for -1 rather than
+	/** 0..3. The native reads the plane off a derived but not live-verified offset (ENTITY_PLANE_COORD,
+	 *  see client/offsets.hpp) and range-guards it to -1 = unknown; this shim assumes the GROUND FLOOR for -1 rather than
 	 *  passing it through. Why: the ported plugin packs the plane with {@code (plane & 0x3) << 30}
 	 *  (WorldPointUtil.packWorldPoint), so a -1 silently became plane 3 for both the start and the
 	 *  target tile -- a floor the collision map has no walkable data for -- while every overlay

@@ -113,13 +113,14 @@ inline int npcTypeId(std::uintptr_t entity) {
     return (id < 0 || id > 0xFFFF) ? -1 : id;
 }
 
-/// A player's combat level. ALWAYS -1 on this build: the offset we had (PLAYER_COMBAT_LEVEL,
-/// offsets.hpp) is wrong on client-240-6 -- it read a pointer fragment on NPCs and -1 on the local
-/// player -- so reading it here shipped pointer garbage out as players' combat levels. Same
-/// -1-means-unavailable convention as npcTypeId above; re-derive the offset (see its block in
-/// offsets.hpp) before any read comes back.
-inline int combatLevel(std::uintptr_t /*entity*/) {
-    return -1;
+/// A PLAYER's combat level (call it for players only: NPCs keep theirs on the definition). The offset
+/// (PLAYER_COMBAT_LEVEL, offsets.hpp) is read off the client's own appearance decoder on 241-3 and NOT
+/// VERIFIED live -- the old 0x734 was the overhead-prayer icon, which is why it read -1. Range-guarded
+/// like npcTypeId above: OSRS combat levels are 3..126, so anything else is a misread and goes out as -1.
+inline int combatLevel(std::uintptr_t entity) {
+    if (!entity) return -1;
+    const int lvl = rd<std::int32_t>(entity + off::PLAYER_COMBAT_LEVEL, -1);
+    return (lvl < 3 || lvl > 126) ? -1 : lvl;
 }
 
 /// Walk every entity in the client's registry -- players AND NPCs, from their separate tables -- and
@@ -166,22 +167,15 @@ void forEachEntity(F&& cb) {
                     ent.fineY = xyOk ? fy : cy;
                     ent.fineH = (fh >= -4000 && fh <= 1000) ? fh : 0;
                 }
-                // Plane: ENTITY_PLANE (0x420) is SUSPECT on this build and offsets.hpp's decompile
-                // notes point at ENTITY_PLANE_COORD (0x7CC) instead -- the `coord` binding returns
-                // {+0x7CC, +0x3F0, +0x418} and the last two ARE the verified scene x/y. Read both and
-                // prefer the decompile-backed one when it is a plausible plane (0..3), else fall back
-                // to the old read when THAT is plausible, else -1 = unknown. A preference, not a
-                // guarantee: if 0x420 was right and +0x7CC is some other small int, this is now wrong
-                // where it was right. Both raw ints go out on the OXC_LOG [proj] line; the live
-                // staircase check (which one steps 0..3) decides -- if raw420 steps and raw7CC does
-                // not, flip the preference here (or collapse back to 0x420). Java's
-                // consumers of -1: AutoWalk walks without the plane filter; the RuneLite shim's
+                // Plane: ENTITY_PLANE_COORD, the level the client's own `coord` binding returns beside
+                // the verified scene x/y. The old ENTITY_PLANE (0x420) is a path-queue y slot -- a
+                // scene coordinate, refuted on 241-3 (offsets.hpp) -- so it is no longer a fallback:
+                // a near-edge y of 0..3 would have shipped as a plane. Out of 0..3 is -1 = unknown.
+                // Java's consumers of -1: AutoWalk walks without the plane filter; the RuneLite shim's
                 // WorldView.getPlane() assumes the ground floor (its javadoc says why); 0xClient's own
                 // entity overlays never read it.
-                const int p7cc = rd<std::int32_t>(e + off::ENTITY_PLANE_COORD, -1);
-                const int p420 = rd<std::int32_t>(e + off::ENTITY_PLANE, -1);
-                ent.plane = (p7cc >= 0 && p7cc <= 3) ? p7cc
-                          : (p420 >= 0 && p420 <= 3) ? p420 : -1;
+                const int p = rd<std::int32_t>(e + off::ENTITY_PLANE_COORD, -1);
+                ent.plane = (p >= 0 && p <= 3) ? p : -1;
                 ent.animation   = rd<std::int32_t>(e + off::ENTITY_ANIMATION, -1);
                 ent.orientation = rd<std::int32_t>(e + off::ENTITY_ORIENTATION);
                 ent.target      = rd<std::int32_t>(e + off::ENTITY_TARGET, -1);
@@ -266,9 +260,9 @@ inline int skillXp(int which) {
     return rd<std::int32_t>(c + off::SKILL_XP + static_cast<std::uintptr_t>(which) * 4);
 }
 
-/// Run energy, 0..10000 (so 10000 is a full bar). SUSPECT: the offset behind this (RUN_ENERGY,
-/// offsets.hpp) could not be re-derived on client-240-6 and nothing here re-checks it, so treat the
-/// number as unverified until that happens.
+/// Run energy, 0..10000 (so 10000 is a full bar). The offset behind this (RUN_ENERGY, offsets.hpp) is
+/// derived on client-241-3 from the run-energy packet handler and the script getter that shows it as a
+/// percentage; NOT VERIFIED live, and on a build whose file does not derive it, it is a carried guess.
 inline int runEnergy() {
     std::uintptr_t c = clientObj();
     return c ? rd<std::int32_t>(c + off::RUN_ENERGY) : 0;

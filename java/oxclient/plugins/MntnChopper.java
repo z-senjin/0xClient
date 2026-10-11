@@ -9,7 +9,6 @@ import java.util.List;
 import java.util.Random;
 
 import oxclient.Plugin;
-import oxclient.api.Actions;
 import oxclient.api.Bank;
 import oxclient.api.Game;
 import oxclient.api.Inventory;
@@ -244,7 +243,7 @@ public final class MntnChopper extends Plugin {
             nextActionAt = now + 1200;
             return;
         }
-        if (Actions.object(tree.id(), tree.worldX(), tree.worldY())) {
+        if (tree.interact(1)) {
             target = tree;
             treesClicked++;
             lastProblem = "";

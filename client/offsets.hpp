@@ -355,6 +355,14 @@ inline std::uintptr_t SKILL_XP        = 0x3428;
 // written from the varp/varbit transmit path. How to re-derive: find the code that raises that event
 // and read the client field it copies from, or hook-and-log -- read candidate client fields while
 // sprinting until one counts 0..10000.
+// client-241-3 (2026-10-11, static): DERIVED, and the above is how. The event names sit in a table of
+// {name, length, id}; ON_RUN_ENERGY_TRANSMIT is id 0x1E and ON_RUN_WEIGHT_TRANSMIT 0x1F, and the packet
+// handler raises them as 0x1D / 0x1E (the table id less one). The handler (inside rva 0x8e500) reads an
+// unsigned short into client+0x34E0 then raises 0x1D, and a SIGNED short into +0x34E4 (the weight) then
+// raises 0x1E. The script getter (rva 0x1a96a0) returns +0x34E0 raw, +0x34E0 / 100 (MOV EAX,0x51eb851f;
+// IMUL [r+0x34E0]: the visible percentage) and +0x34E4. So RUN_ENERGY is 0x34E0 on 241-3, in 0..10000;
+// the 0x34C0 the updater "shifted" it to was wrong. DeriveOffsets.deriveRunEnergy requires both sightings
+// to agree. The default below is still the 240-6-era number, which nothing ever derived. NOT VERIFIED LIVE.
 inline std::uintptr_t RUN_ENERGY = 0x34D0;  // SUSPECT: 0..10000 on the build it came from
 
 // The client's per-frame tick counter. DERIVED STATICALLY; the "+1 per 20ms" cadence is the OSRS frame
@@ -733,13 +741,18 @@ inline std::uintptr_t ENTITY_FINE_Y = 0x200;
 // that verified coords/animation/orientation never checked the plane, so 0x420 was never confirmed.
 // Candidate replacement: 0x7CC -- verify live (climb a staircase/ladder and watch the field step
 // 0..3) before switching; do not flip it on this note alone.
-inline std::uintptr_t ENTITY_PLANE   = 0x420;  // SUSPECT: this build points at 0x7CC instead
+inline std::uintptr_t ENTITY_PLANE   = 0x420;  // REFUTED: a path-queue y slot (see ENTITY_PLANE_COORD)
 // The decompile's candidate, as a SEPARATE constant so 0x420 is not flipped on the note alone: the
 // `coord` binding (FUN_1403af050) and FUN_1400a06e0 above both read entity+0x7CC as the level.
 // Decompile-backed, NOT VERIFIED in-game (2026-09-05). game.hpp reads BOTH: 0x7CC when it is in
 // 0..3, else 0x420 when that is, else -1 -- so if 0x7CC is wrong nothing gets worse than before,
 // and the OXC_LOG [proj] line prints raw420/raw7CC side by side for the staircase check. Once one
 // of them is seen stepping 0..3 on stairs, collapse to a single read and retire the other.
+// client-241-3 (2026-10-11): ENTITY_PLANE (0x420) is shown wrong, and game.hpp no longer falls back to it.
+// The actor's movement step (rva 0x704f0) indexes its path queue as [actor + 0x3EC + n*4] (x) and
+// [actor + 0x414 + n*4] (y), with the count at +0x3EC: +0x3F0 / +0x418 are path[0], the scene x/y, and
+// +0x420 is path y[2] -- a scene coordinate, which is exactly the 44 the 2026-10-09 self-check read.
+// The plane is ENTITY_PLANE_COORD (0x798 on 241-3, derived from the coord binding).
 inline std::uintptr_t ENTITY_PLANE_COORD = 0x7CC;
 // The reader in game.hpp range-guards the result (0..3, else -1 = unknown) so at least obvious
 // garbage is not shipped as a plane; an in-range but wrong value cannot be caught from the number
@@ -922,6 +935,14 @@ inline int            IFTYPE_CHAIN_MAX = 16;     // depth cap on any parent walk
 
 // Both VERIFIED LIVE on client-240-6: every enumerated GE NPC read -1 at 0x4D8 while standing still
 // and a cardinal 0/512/1024/1536 at 0x3E0; coords at 0x3F0/0x418 match npcCoord's disasm exactly.
+// DERIVED on client-241-3 (2026-10-11), same values:
+//   ANIMATION: the actor set-sequence (rva 0x9fe50, and a second copy at 0x71470) opens with
+//   CMP id,[actor+0x4D8]; JNZ; CMP id,-1 -- the current sequence id lives in an animation controller at
+//   +0x4C8 whose definition pointer is +0x4D0 (it reads the definition's restart mode at +0xE4).
+//   ORIENTATION: the actor turn (rva 0x70c70) computes (+0x3E0 - +0x270) & 0x7FF and steps +0x270 toward
+//   +0x3E0 by the turn speed at +0x3E8. So 0x3E0 is the facing the actor is turning TO; the angle it is
+//   DRAWN at is +0x270 (beside the render x/y at +0x268/+0x26C). Standing still they are equal.
+// DeriveOffsets.deriveActorSequence / deriveActorTurn carry both forward.
 inline std::uintptr_t ENTITY_ANIMATION   = 0x4D8;  // current animation id, -1 when idle
 inline std::uintptr_t ENTITY_ORIENTATION = 0x3E0;  // 0..2047, 0 = south, rising clockwise
 
@@ -941,7 +962,14 @@ inline std::uintptr_t ENTITY_TARGET      = 0x3A8;  // uid of the actor's target,
 // on an NPC live returned a pointer fragment (the high half of a heap address), never a level. On the
 // local player it read -1, so this offset is simply WRONG on client-240-6. NOT VERIFIED -- re-derive
 // from the client's combat-level Lua binding before trusting any number that comes out of here.
-inline std::uintptr_t PLAYER_COMBAT_LEVEL = 0x734;
+// client-241-3 (2026-10-11, static): there is no combat-level binding, but the player APPEARANCE decoder
+// (rva 0xa12a0) names it. It reads gender, then two signed bytes into +0x730 (skull icon) and +0x734
+// (PRAYER icon) -- so 0x734 was the overhead-prayer icon, -1 with no prayer up, which is the -1 seen. After
+// the equipment, colours, seven animation shorts and the name it reads an unsigned byte into +0x780 (the
+// combat level), an unsigned short into +0x784 (total level) and a flag byte into +0x794 (hidden).
+// PLAYER_COMBAT_LEVEL is 0x780 on 241-3 (DeriveOffsets.derivePlayerAppearance). NOT VERIFIED LIVE: the
+// self-check compares it with the level your stats make. Players only; NPCs keep theirs on the definition.
+inline std::uintptr_t PLAYER_COMBAT_LEVEL = 0x734;  // SUSPECT: the prayer icon on 241-3; 0x780 is the level
 
 // ---------------------------------------------------------------------------------------------------
 // THE LOGIN FORM'S FIELDS -- NOT VERIFIED

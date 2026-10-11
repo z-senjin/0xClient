@@ -11,7 +11,10 @@ import oxclient.Natives;
  * view would give you a position that changes halfway through your own drawing code. Everything here was
  * read once, at the top of the tick, and will not change under you.</p>
  */
-public final class Entity {
+public final class Entity implements Interactable, Located {
+
+    /** The client's menu action for an NPC's first option; options 2..5 follow it. */
+    private static final int OPNPC1 = 9;
 
     private final int uid, sceneX, sceneY, id, animation, orientation;
     private final int fineX, fineH, fineY, target;
@@ -67,6 +70,7 @@ public final class Entity {
      * Its name, or "" when the client could not read one (mid-spawn, despawned this frame). Read
      * through the cache above, then the entityName native.
      */
+    @Override
     public String name() {
         long key = nameKey(uid, player);
         String n = NAMES.get(key);
@@ -86,10 +90,10 @@ public final class Entity {
 
     /**
      * For an NPC, its type id -- what kind of creature it is, and the thing you filter on. For a
-     * player this is {@code -1}: the combat-level offset the shim had is wrong on this build and has
-     * been gated off pending re-derivation (see {@code PLAYER_COMBAT_LEVEL} in {@code
-     * client/offsets.hpp}), so no player carries a combat level here yet.
+     * player, its combat level, or {@code -1} when the read was not a level (see {@code
+     * PLAYER_COMBAT_LEVEL} in {@code client/offsets.hpp}: derived on client-241-3, not verified live).
      */
+    @Override
     public int id() { return id; }
 
     /** The animation it is playing, or -1 when it is standing still. */
@@ -114,9 +118,11 @@ public final class Entity {
     public int worldY() { return Game.sceneBaseY() + sceneY; }
 
     /** Where it is, in world coordinates. */
+    @Override
     public WorldPoint location() { return new WorldPoint(worldX(), worldY()); }
 
     /** Tiles from you, measured diagonally (a chebyshev distance, like the game's own ranges). */
+    @Override
     public int distance() { return Game.distanceTo(sceneX, sceneY); }
 
     /** Its rendered position, fine units (128 per tile): between tiles while it walks. */
@@ -150,13 +156,18 @@ public final class Entity {
     public boolean busyWithOther() { return target >= 0 && target != Game.me().uid(); }
 
     /** An NPC's five options ("Attack", "Talk-to", "Net"); option n is {@code [n-1]}. Empty strings for a player. */
+    @Override
     public String[] options() { return player ? new String[] {"", "", "", "", ""} : Items.split(oxclient.Natives.npcOptions(uid)); }
 
-    /** The option number (1..5) named {@code text}, ignoring case, or -1. */
-    public int option(String text) {
-        String[] ops = options();
-        for (int i = 0; i < ops.length; i++) if (ops[i].equalsIgnoreCase(text)) return i + 1;
-        return -1;
+    /**
+     * Take an NPC's option {@code option} (1..5, its position in {@link #options}) through the client's own
+     * NPC-option sender. False for a player (their options are not wired), an option out of range, or an NPC
+     * that has despawned since this snapshot.
+     */
+    @Override
+    public boolean interact(int option) {
+        if (player || option < 1 || option > 5) return false;
+        return Natives.interactNpc(uid, OPNPC1 + option - 1);
     }
 
     @Override

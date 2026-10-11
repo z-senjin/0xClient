@@ -284,7 +284,9 @@ def keep_verified(build, sha, offsets):
         cur = offsets.get(name)
         if not cur or e.get("value") != cur.get("value"):
             continue
-        failed = e.get("status") == "suspect" and str(e.get("verification", "")).startswith("FAILED")
+        if cur.get("status") == "refuted":
+            continue    # a value since shown wrong stays refuted; an old FAILED self-check only agrees
+        failed =e.get("status") == "suspect" and str(e.get("verification", "")).startswith("FAILED")
         if e.get("status") != "verified" and not failed:
             continue
         cur["status"] = "suspect" if failed else "verified"
@@ -352,11 +354,14 @@ def merge(build, sha, derived, prev):
             # A doubt the compiled default's own note records (SUSPECT / REFUTED in offsets.hpp) still
             # applies while the carried value IS that default -- older files lost it on the first carry.
             hn = notes.get(name)
+            evidence = f"not derived on {build}; value last {since_status} on {since}: " + origin_evidence(p)
             if hn and hn[0] in DOUBTS and str(p["value"]) == str(_int(k["default"])):
+                if hn[0] != status:
+                    # the note is what changed the verdict, so the note is the evidence
+                    evidence = f"not derived on {build}; {hn[0]} by its note in client/offsets.hpp: {hn[1]}"
                 status = hn[0]
             offsets[name] = {"value": p["value"], "status": status, "kind": kind,
-                             "since": since, "since_status": since_status,
-                             "evidence": f"not derived on {build}; value last {since_status} on {since}: " + origin_evidence(p)}
+                             "since": since, "since_status": since_status, "evidence": evidence}
         else:
             default = k["default"]
             try:

@@ -3,7 +3,6 @@ package oxclient.framework;
 import java.util.ArrayList;
 import java.util.List;
 
-import oxclient.api.Actions;
 import oxclient.api.Combat;
 import oxclient.api.Dialog;
 import oxclient.api.Entity;
@@ -83,7 +82,7 @@ final class Defense {
                     Entity foe = near.stream().filter(e -> e.option("Attack") > 0).findFirst().orElse(null);
                     if (foe == null) { mode = Mode.RUN; route = null; return Task.Result.CONTINUE; }
                     state = "fighting back: " + foe.name();
-                    Actions.npc(foe, "Attack");
+                    foe.interact("Attack");
                     waitUntil = now + 1800;
                 } else state = "fighting back";
             }

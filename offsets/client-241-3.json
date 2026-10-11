@@ -1,7 +1,7 @@
 {
   "build": "241-3",
   "sha256": "166231c8f6bd05c7542b8f0d35eb64b0aad701a87ba6ba41f60c4706de946944",
-  "derived": "2026-10-09T19:35:24Z",
+  "derived": "2026-10-11T22:11:13Z",
   "source": "DeriveOffsets.java",
   "notes": "DO_ACTION candidate for a hook-and-log run: rva 0x372870 is the widget-menu action path (its args are a packed widget id and a component index, NOT scene x/y) | packet-start function rva 0x6795c0 (77 call sites)",
   "offsets": {
@@ -26,7 +26,7 @@
       "kind": "code",
       "since": "240-6",
       "since_status": "suspect",
-      "evidence": "not derived on 241-3; value last suspect on 240-6: compiled default (client/offsets.hpp): --------------------------------------------------------------------------------------------------- FUNCTIONS WE CALL (RVAs from the module base) --------------------------------------------------------------------------------------------------- The client's own \"do a menu action\" entry point. We call it instead of building network packets by hand: it takes the same arguments the real menu does, a"
+      "evidence": "not derived on 241-3; suspect by its note in client/offsets.hpp: SUPERSEDED by the ACT_* senders below; nothing calls it"
     },
     "ACT_TICK": {
       "value": 439296,
@@ -72,8 +72,7 @@
       "value": 3707904,
       "status": "derived",
       "kind": "code",
-      "evidence": "the only four-plus-packet sender that loads its option from the stack in its prologue and tests it with CMP ECX,1 (neither the NPC nor the object sender): rva 0x389400",
-      "plausible": "hook-and-log 2026-10-09: the client's own Take on a dropped log called it with (id 1511, quantity 1, args, option 3, flag 0); 0xClient's own call not yet seen"
+      "evidence": "the only four-plus-packet sender that loads its option from the stack in its prologue and tests it with CMP ECX,1 (neither the NPC nor the object sender): rva 0x389400"
     },
     "ACT_RESUME": {
       "value": 3722784,
@@ -90,7 +89,7 @@
     "KEY_HANDLER_VTBL": {
       "value": 12898952,
       "status": "derived",
-      "kind": "global",
+      "kind": "field",
       "evidence": "the only .rdata table whose destructor stores it and whose slots 1..3 sit by the WM_CHAR function: keyDown/keyUp/keyChar"
     },
     "TARGET_STATE": {
@@ -137,15 +136,13 @@
       "value": 3723120,
       "status": "derived",
       "kind": "code",
-      "evidence": "the selection-reading sender that resolves its target component the way ACT_IF_OP does (three or more shared callees): rva 0x38cf70",
-      "plausible": "hook-and-log 2026-10-09: the client's own 'Use Tinderbox -> Logs' passed target {0x950000, 2, 1511}; 0xClient's own call not yet seen"
+      "evidence": "the selection-reading sender that resolves its target component the way ACT_IF_OP does (three or more shared callees): rva 0x38cf70"
     },
     "ACT_ON_LOC": {
       "value": 3701552,
       "status": "derived",
       "kind": "code",
-      "evidence": "the selection-reading sender that shares a post-click helper with ACT_LOC_OP: rva 0x387b30",
-      "plausible": "hook-and-log 2026-10-09: the client's own 'Use Logs -> Bank booth' called it with args {0, 3091, 3243, 10355, 10355, 0} and the selection {0x950000, 2, 1511}; 0xClient's own call not yet seen"
+      "evidence": "the selection-reading sender that shares a post-click helper with ACT_LOC_OP: rva 0x387b30"
     },
     "ACT_ON_NPC": {
       "value": 3704368,
@@ -307,14 +304,11 @@
       "verification": "self-check 2026-10-09: all 25 skills' base level is the level their xp earns"
     },
     "RUN_ENERGY": {
-      "value": 13504,
-      "status": "suspect",
+      "value": 13536,
+      "status": "derived",
       "kind": "field",
-      "since": "240-6",
-      "since_status": "suspect",
-      "evidence": "not derived on 241-3; value last suspect on 240-6: compiled default (client/offsets.hpp): SUSPECT: 0..10000 on the build it came from",
-      "previous": 13520,
-      "inference": "not derived; the nearest derived client object fields on both sides (0x3428 and 0x49b8) both moved by -0x10, so this one was moved with them. Verify before trusting"
+      "evidence": "the run-energy packet handler stores an unsigned short here and raises script event 0x1d (ON_RUN_ENERGY_TRANSMIT, table id 0x1e): 08fdfe  MOV dword ptr [R13 + 0x34e0],EAX; the script getter divides it by 100: 1a9b11  IMUL dword ptr [R11 + 0x34e0]",
+      "previous": 13520
     },
     "CYCLE": {
       "value": 8548,
@@ -789,19 +783,17 @@
       "kind": "field",
       "evidence": "ObjType.isTwoHanded tests it against the shield slot (5): 23b7d1  CMP dword ptr [RAX + 0xe0],0x5"
     },
-    "ITEMDEF_IOPS": {
-      "value": 264,
-      "status": "derived",
-      "kind": "field",
-      "evidence": "an ObjType option getter (rva 0x23b2e0) hands def+N to the five-string converter: the inventory list",
-      "note": "swapped with ITEMDEF_OPS 2026-10-10 after the self-check read Take at +0xF0"
-    },
     "ITEMDEF_OPS": {
       "value": 240,
       "status": "derived",
       "kind": "field",
-      "evidence": "an ObjType option getter (rva 0x23aff0) hands def+N to the 0x40-stride converter: the ground list",
-      "note": "seen live 2026-10-10: a Bronze sword's +0xF0 list read //Take// (self-check); the self-check pass on the next run makes it verified"
+      "evidence": "an ObjType option getter (rva 0x23aff0) hands def+N to the 0x40-stride converter: the ground list"
+    },
+    "ITEMDEF_IOPS": {
+      "value": 264,
+      "status": "derived",
+      "kind": "field",
+      "evidence": "an ObjType option getter (rva 0x23b2e0) hands def+N to the five-string converter: the inventory list"
     },
     "ENTITY_SCENE_X": {
       "value": 1008,
@@ -847,10 +839,11 @@
     },
     "ENTITY_PLANE": {
       "value": 1056,
-      "status": "suspect",
+      "status": "refuted",
       "kind": "field",
-      "evidence": "not derived on 241-3; value last suspect on 240-6: compiled default (client/offsets.hpp): SUSPECT: this build points at 0x7CC instead",
-      "verification": "FAILED self-check 2026-10-09: read 44"
+      "since": "240-6",
+      "since_status": "suspect",
+      "evidence": "not derived on 241-3; refuted by its note in client/offsets.hpp: REFUTED: a path-queue y slot (see ENTITY_PLANE_COORD)"
     },
     "ENTITY_PLANE_COORD": {
       "value": 1944,
@@ -1052,20 +1045,15 @@
     },
     "ENTITY_ANIMATION": {
       "value": 1240,
-      "status": "carried",
+      "status": "derived",
       "kind": "field",
-      "since": "240-6",
-      "since_status": "verified",
-      "evidence": "not derived on 241-3; value last verified on 240-6: compiled default (client/offsets.hpp): current animation id, -1 when idle",
-      "inference": "the nearest derived entity fields on both sides (0x418, 0x710) did not move, so this one most likely did not either"
+      "evidence": "the actor set-sequence compares the new id with the current one (2 copies agree): 0714a1  CMP EDI,dword ptr [RDX + 0x4d8]; 09fe6e  CMP EDX,dword ptr [RCX + 0x4d8]"
     },
     "ENTITY_ORIENTATION": {
       "value": 992,
-      "status": "carried",
+      "status": "derived",
       "kind": "field",
-      "since": "240-6",
-      "since_status": "default",
-      "evidence": "not derived on 241-3; value last default on 240-6: compiled default (client/offsets.hpp): 0..2047, 0 = south, rising clockwise"
+      "evidence": "the actor turn (rva 0x70c70) steps the drawn angle +0x270 toward this one by (this - drawn) & 0x7ff: 070c9a  AND EDX,0x7ff"
     },
     "ENTITY_TARGET": {
       "value": 936,
@@ -1076,11 +1064,11 @@
       "verification": "combat probe 2026-10-09 (client-241-3, gradlew debugRun -Pcombat): attacking a Chicken, your +0x3A8 held its uid and its +0x3A8 held your handle 1805; idle, yours had no match; a Goblin attacking you held 1805 while hitpoints fell 10 -> 5"
     },
     "PLAYER_COMBAT_LEVEL": {
-      "value": 1844,
-      "status": "suspect",
+      "value": 1920,
+      "status": "derived",
       "kind": "field",
-      "evidence": "not derived on 241-3; value last default on 240-6: compiled default (client/offsets.hpp): Combat level, on a PLAYER entity. NPCs keep theirs on the shared definition instead -- reading this on an NPC live returned a pointer fragment (the high half of a heap address), never a level. On the local player it read -1, so this offset is simply WRONG on client-240-6. NOT VERIFIED -- re-derive from the client's combat-level Lua binding before trusting any number that comes out of here.",
-      "verification": "FAILED self-check 2026-10-09: read -1, your stats make 3"
+      "evidence": "the player appearance decoder (rva 0xa12a0) stores the byte after the name, then the total level at +4 and the hidden flag: 0a1a04  MOV dword ptr [RSI + 0x780],ECX",
+      "previous": 1844
     },
     "LOGIN_PASSWORD_DELTA": {
       "value": 508,
@@ -1088,7 +1076,7 @@
       "kind": "field",
       "since": "240-6",
       "since_status": "refuted",
-      "evidence": "not derived on 241-3; value last refuted on 240-6: compiled default (client/offsets.hpp): --------------------------------------------------------------------------------------------------- THE LOGIN FORM'S FIELDS -- NOT VERIFIED --------------------------------------------------------------------------------------------------- Distance from the client's username buffer to its password buffer, so the autologin plugin can SET the two fields instead of typing them at a form whose focus i"
+      "evidence": "not derived on 241-3; refuted by its note in client/offsets.hpp: --------------------------------------------------------------------------------------------------- THE LOGIN FORM'S FIELDS -- NOT VERIFIED --------------------------------------------------------------------------------------------------- Distance from the client's username buffer to its password buffer, so the autologin plugin can SET the two fields instead of typing them at a form whose focus i"
     },
     "OPLOC1": {
       "value": 3,

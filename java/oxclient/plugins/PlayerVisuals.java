@@ -62,11 +62,9 @@ public final class PlayerVisuals extends Plugin {
             if (at == null) continue;
             Hud.entityBox(g, at, 16, 34, colour);
 
-            // For a player the id slot carries their combat level -- see Entity.id().
-            // PLAYER_COMBAT_LEVEL (offsets.hpp) is documented WRONG on client-240-6: read live it
-            // returned pointer fragments, so anything outside the levels a real account can hold is
-            // garbage, and a garbage label over a player is worse than no label. Re-derive the
-            // offset, then widen this back.
+            // For a player the id slot carries their combat level -- see Entity.id(). The offset is
+            // derived but not verified live, and a garbage label over a player is worse than none, so
+            // anything outside the levels a real account can hold is not drawn.
             if (combat && p.id() >= 3 && p.id() <= 126) {
                 Hud.textCentred(g, "lvl " + p.id(), at.x, at.y - 38, colour);
             }

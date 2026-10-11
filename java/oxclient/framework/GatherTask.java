@@ -2,7 +2,6 @@ package oxclient.framework;
 
 import java.util.List;
 
-import oxclient.api.Actions;
 import oxclient.api.Dialog;
 import oxclient.api.Entity;
 import oxclient.api.Game;
@@ -219,7 +218,7 @@ public final class GatherTask extends BaseTask implements Spotted {
             if (best == null) return false;
             int op = resource.optionName() == null ? -1 : best.option(resource.optionName());
             state("clicking " + best.name() + (op > 0 ? " (" + resource.optionName() + ")" : ""));
-            return Actions.npc(best, op > 0 ? op : resource.option());
+            return best.interact(op > 0 ? op : resource.option());
         }
         SceneObject o = Scenery.nearest(spot.radius() + 6, s -> !s.isWall() && resource.matches(s.id(), s.name()));
         if (o == null) return false;

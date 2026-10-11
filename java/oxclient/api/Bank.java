@@ -125,6 +125,29 @@ public final class Bank {
     /** Withdraw all of this item. False when the bank does not have it. */
     public static boolean withdrawAll(int itemId) { return withdraw(slotOf(itemId), opWithdrawAll); }
 
+    /** Withdraw one of the item named {@code name} (ignoring case). False when the bank does not have it. */
+    public static boolean withdrawOne(String name) { return withdraw(slotOf(name), opWithdraw1); }
+
+    /** Withdraw five of the item named {@code name}. False when the bank does not have it. */
+    public static boolean withdrawFive(String name) { return withdraw(slotOf(name), opWithdraw5); }
+
+    /** Withdraw all of the item named {@code name}. False when the bank does not have it. */
+    public static boolean withdrawAll(String name) { return withdraw(slotOf(name), opWithdrawAll); }
+
+    /** Deposit every one of the item named {@code name} you carry. False when you carry none. */
+    public static boolean depositAll(String name) { return depositAll(Inventory.firstSlot(name)); }
+
+    /** How many of the item named {@code name} the bank holds (0 when none, or the bank is closed). */
+    public static int count(String name) {
+        int[] f = contents();
+        int n = 0;
+        for (int i = 0; i + 1 < f.length; i += 2) if (f[i + 1] > 0 && Items.named(f[i], name)) n += f[i + 1];
+        return n;
+    }
+
+    /** True when the bank holds at least one of the item named {@code name}. */
+    public static boolean contains(String name) { return slotOf(name) >= 0; }
+
     /** Close the bank with its close button (Escape only closes interfaces when that game setting is on). */
     public static boolean close() { return Interfaces.click(CLOSE_WIDGET, CLOSE_CHILD, 1); }
 

@@ -106,9 +106,8 @@ inline jboolean JNICALL nReady(JNIEnv*, jclass) {
 /// The last three are the render position (offsets.hpp ENTITY_FINE_*): where the model is drawn, in
 /// fine units, height included -- the height is what puts a box on the entity instead of at datum 0.
 ///
-/// `typeId` is the NPC's type id; for players it is always -1 on this build -- PLAYER_COMBAT_LEVEL
-/// (offsets.hpp) is wrong here and reading it shipped pointer-fragment garbage as combat levels -- so
-/// the slot is -1 for players until that offset is re-derived.
+/// `typeId` is the NPC's type id; for a player it is the combat level (game.hpp combatLevel: derived on
+/// 241-3, not verified live, -1 when the read is outside 3..126).
 ///
 /// One array rather than one object per entity on purpose -- this is called thirty times a second, and
 /// allocating a few hundred short-lived objects a frame is exactly the kind of thing that turns into a
@@ -125,8 +124,7 @@ inline jintArray JNICALL nEntities(JNIEnv* env, jclass) {
         flat.push_back(e.sceneX);
         flat.push_back(e.sceneY);
         flat.push_back(e.player ? 1 : 0);
-        // -1 for players: combatLevel() is gated off because PLAYER_COMBAT_LEVEL is wrong on this
-        // build (see offsets.hpp and game.hpp).
+        // Players: the combat level, -1 when unreadable (game.hpp combatLevel).
         flat.push_back(e.player ? combatLevel(e.addr) : npcTypeId(e.addr));
         flat.push_back(e.animation);
         flat.push_back(e.orientation);
@@ -291,8 +289,8 @@ inline jlong JNICALL nProject(JNIEnv*, jclass, jint fineX, jint fineHeight, jint
                 outH = rd<std::int32_t>(v10 + off::VIEW_OUT_H);
             }
             // Both raw plane candidates, unguarded, so the staircase check can be read off the log
-            // (game.hpp prefers ENTITY_PLANE_COORD when it is 0..3 -- `plane=` shows the winner).
-            const int raw420 = rd<std::int32_t>(me.addr + off::ENTITY_PLANE, -1);        // 0x420, SUSPECT
+            // (game.hpp reads ENTITY_PLANE_COORD only -- `plane=` is that, guarded to 0..3).
+            const int raw420 = rd<std::int32_t>(me.addr + off::ENTITY_PLANE, -1);        // 0x420, REFUTED (path y)
             const int raw7CC = rd<std::int32_t>(me.addr + off::ENTITY_PLANE_COORD, -1);  // 0x7CC, decompile
             oxc::logf("[proj] you@scene(%d,%d) centre -> (%.1f,%.1f) canvas=%dx%d cam=(%d,%d,%d) "
                      "cam-you=(%d,%d,%d) view=x%d/%d y%d/%d plane=%d raw420=%d raw7CC=%d\n",

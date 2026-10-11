@@ -1060,6 +1060,190 @@ public class DeriveOffsets extends GhidraScript {
         deriveGroundItems();
         deriveItemDefs();
         deriveKeyInput();
+        deriveActorTurn();
+        deriveActorSequence();
+        derivePlayerAppearance();
+        deriveRunEnergy();
+    }
+
+    /**
+     * ENTITY_ORIENTATION: the actor's per-tick turn. It loads the facing the actor is turning TO (+A) and the
+     * angle it is drawn at (+B) off the same register, takes (A - B) & 0x7FF, steps B by the turn speed
+     * (subtracting when the difference is over 0x400, snapping when within a step of 0x800), and masks B with
+     * 0x7FF again. A is the field; B is the rendered angle that follows it. Two instructions name both, and
+     * the 0x400 / 0x800 constants are what make it a 2048-unit angle and not some other subtraction.
+     */
+    private void deriveActorTurn() {
+        Pattern ld = Pattern.compile("^MOV (\\w+),dword ptr \\[(R\\w+) \\+ 0x([0-9a-f]+)\\]$");
+        List<long[]> hits = new ArrayList<>();
+        List<String> where = new ArrayList<>();
+        for (Function f : currentProgram.getFunctionManager().getFunctions(true)) {
+            if (monitor.isCancelled()) return;
+            if (f.getBody().getNumAddresses() > 0x400) continue;
+            List<Instruction> b = bodyOf(f);
+            if (!comparesWith(f, 0x400)) continue;
+            boolean has800 = false;
+            for (Instruction i : b) has800 |= i.toString().matches("^MOV E\\w+,0x800$");
+            if (!has800) continue;
+            for (int k = 0; k < b.size(); k++) {
+                if (!b.get(k).toString().matches("^AND E\\w+,0x7ff$")) continue;
+                Instruction sub = k > 0 ? b.get(k - 1) : null;
+                if (sub == null || !sub.getMnemonicString().equals("SUB")) continue;
+                // the two loads feeding it, newest first: the first one found is B (subtrahend), the next A
+                List<Matcher> loads = new ArrayList<>();
+                for (int j = k - 2; j >= 0 && j >= k - 6 && loads.size() < 2; j--) {
+                    Matcher m = ld.matcher(b.get(j).toString());
+                    if (m.matches()) loads.add(m);
+                }
+                if (loads.size() != 2 || !loads.get(0).group(2).equals(loads.get(1).group(2))) continue;
+                long cur = Long.parseLong(loads.get(0).group(3), 16), tgt = Long.parseLong(loads.get(1).group(3), 16);
+                // B must be written back masked: AND dword ptr [reg + B],0x7ff (or a store then a mask)
+                boolean masked = false;
+                for (Instruction i : b) masked |= i.toString().matches("^AND dword ptr \\[R\\w+ \\+ 0x" + Long.toHexString(cur) + "\\],0x7ff$");
+                if (!masked) continue;
+                hits.add(new long[] {tgt, cur, rva(f.getEntryPoint())});
+                where.add(at(b.get(k)));
+            }
+        }
+        if (hits.size() == 1) put("ENTITY_ORIENTATION", hits.get(0)[0], "the actor turn (rva 0x" + Long.toHexString(hits.get(0)[2])
+                + ") steps the drawn angle +0x" + Long.toHexString(hits.get(0)[1]) + " toward this one by (this - drawn) & 0x7ff: " + where.get(0));
+        else notes.add("ENTITY_ORIENTATION: " + hits.size() + " turn-routine candidates -- not derived");
+    }
+
+    /**
+     * ENTITY_ANIMATION: the actor's set-sequence. It compares the requested sequence id with the current one
+     * (CMP id,[actor + A]; JNZ; CMP id,-1), and on a repeat reads the sequence definition's restart mode at
+     * +0xe4 and resets the animation controller that holds the id (LEA RCX,[actor + A - 0x10]). The client has
+     * more than one copy of this routine (one per caller shape); every copy must name the same A.
+     */
+    private void deriveActorSequence() {
+        Pattern cmp = Pattern.compile("^CMP (E\\w+),dword ptr \\[(R\\w+) \\+ 0x([0-9a-f]+)\\]$");
+        Set<Long> found = new LinkedHashSet<>();
+        List<String> where = new ArrayList<>();
+        for (Function f : currentProgram.getFunctionManager().getFunctions(true)) {
+            if (monitor.isCancelled()) return;
+            if (f.getBody().getNumAddresses() > 0x800) continue;
+            List<Instruction> b = bodyOf(f);
+            for (int k = 0; k + 2 < b.size() && k < 24; k++) {
+                Matcher m = cmp.matcher(b.get(k).toString());
+                if (!m.matches() || !b.get(k + 1).getMnemonicString().equals("JNZ")) continue;
+                if (!b.get(k + 2).toString().equals("CMP " + m.group(1) + ",-0x1")) continue;
+                long a = Long.parseLong(m.group(3), 16);
+                boolean ctl = false, mode = false;
+                for (Instruction i : b) {
+                    String s = i.toString();
+                    ctl |= s.matches("^LEA RCX,\\[R\\w+ \\+ 0x" + Long.toHexString(a - 0x10) + "\\]$");
+                    mode |= s.contains(" + 0xe4]");
+                }
+                if (!ctl || !mode) continue;
+                found.add(a);
+                where.add(at(b.get(k)));
+            }
+        }
+        if (found.size() == 1) put("ENTITY_ANIMATION", found.iterator().next(), "the actor set-sequence compares the new id with the current one ("
+                + where.size() + " copies agree): " + String.join("; ", where));
+        else notes.add("ENTITY_ANIMATION: set-sequence candidates name " + hex(found) + " -- not derived");
+    }
+
+    /**
+     * PLAYER_COMBAT_LEVEL: the player appearance decoder. After the name it reads, in order, an unsigned byte
+     * (combat level) into [player + X], an unsigned short (total level) into [player + X + 4], and a flag byte
+     * compared with 1 (hidden) -- MOVZX byte / store, MOVZX ECX,AX / store, SETZ AL / byte store. The function
+     * also checks seven animation shorts against 0xffff. Its first three bytes are gender, skull icon and
+     * PRAYER icon; the last of those is what the old 0x734 was reading (-1 = no overhead prayer).
+     */
+    private void derivePlayerAppearance() {
+        Pattern lvl = Pattern.compile("^MOV dword ptr \\[(R\\w+) \\+ 0x([0-9a-f]+)\\],(E\\w+)$");
+        List<long[]> hits = new ArrayList<>();
+        List<String> where = new ArrayList<>();
+        for (Function f : currentProgram.getFunctionManager().getFunctions(true)) {
+            if (monitor.isCancelled()) return;
+            List<Instruction> b = bodyOf(f);
+            int shorts = 0;
+            for (Instruction i : b) if (i.toString().matches("^CMP E\\w+,0xffff$")) shorts++;
+            if (shorts < 7) continue;
+            for (int k = 1; k < b.size(); k++) {
+                Matcher m = lvl.matcher(b.get(k).toString());
+                if (!m.matches() || !b.get(k - 1).toString().matches("^MOVZX " + m.group(3) + ",byte ptr \\[.*\\]$")) continue;
+                String reg = m.group(1);
+                long x = Long.parseLong(m.group(2), 16);
+                boolean total = false, hidden = false;
+                for (int j = k + 1; j < b.size() && j <= k + 14; j++) {
+                    String s = b.get(j).toString();
+                    if (s.equals("MOV dword ptr [" + reg + " + 0x" + Long.toHexString(x + 4) + "],ECX") && b.get(j - 1).toString().equals("MOVZX ECX,AX")) total = true;
+                    if (total && s.startsWith("MOV byte ptr [" + reg + " + 0x") && s.endsWith("],AL") && b.get(j - 1).toString().equals("SETZ AL")) { hidden = true; break; }
+                }
+                if (!total || !hidden) continue;
+                hits.add(new long[] {x, rva(f.getEntryPoint())});
+                where.add(at(b.get(k)));
+            }
+        }
+        if (hits.size() == 1) put("PLAYER_COMBAT_LEVEL", hits.get(0)[0], "the player appearance decoder (rva 0x" + Long.toHexString(hits.get(0)[1])
+                + ") stores the byte after the name, then the total level at +4 and the hidden flag: " + where.get(0));
+        else notes.add("PLAYER_COMBAT_LEVEL: " + hits.size() + " appearance-decoder candidates -- not derived");
+    }
+
+    /**
+     * RUN_ENERGY: two independent sightings must agree. (1) The client names its script events in a table of
+     * {name, length, id}; the run-energy packet handler stores the energy (an unsigned short) into
+     * [client + X] and raises event (id - 1) for "ON_RUN_ENERGY_TRANSMIT" a few instructions later -- the
+     * raise numbering is the table id less one (run weight beside it does the same with id - 1 of its own
+     * entry). (2) The script getter for the visible percentage divides [client + X] by 100, which the
+     * compiler emits as MOV EAX,0x51eb851f; IMUL dword ptr [reg + X].
+     */
+    private void deriveRunEnergy() {
+        Long eventId = scriptEventId("ON_RUN_ENERGY_TRANSMIT");
+        if (eventId == null) { notes.add("RUN_ENERGY: no {name, length, id} entry for ON_RUN_ENERGY_TRANSMIT -- not derived"); return; }
+        String raise = "MOV ECX,0x" + Long.toHexString(eventId - 1);
+        Pattern store = Pattern.compile("^MOV dword ptr \\[R\\w+ \\+ 0x([0-9a-f]+)\\],EAX$");
+        Set<Long> stores = new LinkedHashSet<>();
+        String storeAt = null;
+        Map<Long, String> divs = new LinkedHashMap<>();
+        for (Instruction i : currentProgram.getListing().getInstructions(true)) {
+            if (monitor.isCancelled()) return;
+            String s = i.toString();
+            if (s.equals("MOVZX EAX,AX")) {
+                Instruction j = i.getNext();
+                boolean raised = false;
+                Long x = null;
+                Instruction st = null;
+                for (int k = 0; k < 4 && j != null; k++, j = j.getNext()) {
+                    Matcher m = store.matcher(j.toString());
+                    if (m.matches() && x == null) { x = Long.parseLong(m.group(1), 16); st = j; }
+                    raised |= j.toString().equals(raise);
+                }
+                if (x != null && raised) { stores.add(x); storeAt = at(st); }
+            } else if (s.equals("MOV EAX,0x51eb851f") && i.getNext() != null) {
+                Matcher m = Pattern.compile("^IMUL dword ptr \\[R\\w+ \\+ 0x([0-9a-f]+)\\]$").matcher(i.getNext().toString());
+                if (m.matches()) divs.putIfAbsent(Long.parseLong(m.group(1), 16), at(i.getNext()));
+            }
+        }
+        if (stores.size() == 1 && divs.containsKey(stores.iterator().next()))
+            put("RUN_ENERGY", stores.iterator().next(), "the run-energy packet handler stores an unsigned short here and raises script event 0x"
+                    + Long.toHexString(eventId - 1) + " (ON_RUN_ENERGY_TRANSMIT, table id 0x" + Long.toHexString(eventId) + "): " + storeAt
+                    + "; the script getter divides it by 100: " + divs.get(stores.iterator().next()));
+        else notes.add("RUN_ENERGY: handler stores " + hex(stores) + " -- none or several, or no /100 getter reads it -- not derived");
+    }
+
+    /** The id the client's script-event name table gives `name`: the qword after {pointer-to-name, length}. */
+    private Long scriptEventId(String name) {
+        for (Address s : findStrings(name)) {
+            byte[] ptr = new byte[8];
+            long va = s.getOffset();
+            for (int k = 0; k < 8; k++) ptr[k] = (byte) (va >>> (8 * k));
+            for (MemoryBlock blk : currentProgram.getMemory().getBlocks()) {
+                if (!blk.isInitialized() || blk.isExecute()) continue;
+                Address a = currentProgram.getMemory().findBytes(blk.getStart(), blk.getEnd(), ptr, null, true, monitor);
+                while (a != null) {
+                    try {
+                        long len = currentProgram.getMemory().getLong(a.add(8)), id = currentProgram.getMemory().getLong(a.add(16));
+                        if (len == name.length() && id > 0 && id < 0x400) return id;
+                    } catch (Exception e) { /* unreadable */ }
+                    a = currentProgram.getMemory().findBytes(a.add(1), blk.getEnd(), ptr, null, true, monitor);
+                }
+            }
+        }
+        return null;
     }
 
     /**

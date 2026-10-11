@@ -214,10 +214,10 @@ inline void checkEntities(Results& r, const Entity& me) {
     r.add({"SCENE", "SCENE_BASE_X", "SCENE_BASE_Y"}, baseOk ? "pass" : "fail",
           fmt("scene corner (%d,%d)%s", b.x, b.y, baseOk ? ": in the world and chunk-aligned" : ""));
 
-    // Planes. Only a staircase settles which one is right; here both just have to look like a plane.
-    const int p7 = rd<std::int32_t>(e + off::ENTITY_PLANE_COORD, -1), p4 = rd<std::int32_t>(e + off::ENTITY_PLANE, -1);
+    // Plane. Only a staircase settles it; here it just has to look like a plane. (ENTITY_PLANE, the old
+    // 0x420, is not tested: it is a path-queue y slot, refuted in offsets.hpp.)
+    const int p7 = rd<std::int32_t>(e + off::ENTITY_PLANE_COORD, -1);
     r.add({"ENTITY_PLANE_COORD"}, (p7 >= 0 && p7 <= 3) ? "plausible" : "fail", fmt("read %d", p7));
-    r.add({"ENTITY_PLANE"}, (p4 >= 0 && p4 <= 3) ? "plausible" : "fail", fmt("read %d", p4));
 
     // Orientation and animation over every entity: the right shape everywhere, and not all zero.
     int n = 0, orientOk = 0, orientNonZero = 0, animOk = 0, targetOk = 0;

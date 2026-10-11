@@ -19,24 +19,22 @@ public final class GroundItems {
     private GroundItems() {}
 
     /** One stack on the ground. */
-    public record GroundItem(int id, int quantity, int sceneX, int sceneY) {
+    public record GroundItem(int id, int quantity, int sceneX, int sceneY) implements Interactable, Located {
         public int worldX() { return Game.sceneBaseX() + sceneX; }
 
         public int worldY() { return Game.sceneBaseY() + sceneY; }
 
-        public String name() { return Items.name(id); }
+        @Override public String name() { return Items.name(id); }
 
-        public int distance() { return Game.distanceTo(sceneX, sceneY); }
+        @Override public int distance() { return Game.distanceTo(sceneX, sceneY); }
 
-        /** The option number (1..5) whose text is {@code text}, ignoring case, or -1. */
-        public int option(String text) {
-            String[] ops = Items.groundOptions(id);
-            for (int i = 0; i < ops.length; i++) if (ops[i].equalsIgnoreCase(text)) return i + 1;
-            return -1;
-        }
+        @Override public WorldPoint location() { return new WorldPoint(worldX(), worldY()); }
 
-        /** Take option {@code op} on it. False when the action was dropped. */
-        public boolean interact(int op) { return Natives.groundItemAction(sceneX, sceneY, id, quantity, op); }
+        /** Its five ground options ("Take" is usually the third); option n is {@code [n-1]}. */
+        @Override public String[] options() { return Items.groundOptions(id); }
+
+        /** Take option {@code op} (1..5) on it. False when the action was dropped. */
+        @Override public boolean interact(int op) { return Natives.groundItemAction(sceneX, sceneY, id, quantity, op); }
 
         /**
          * Pick it up: the "Take" option by name, else option 3 -- the option the client itself sent for
@@ -47,6 +45,15 @@ public final class GroundItems {
             return interact(op > 0 ? op : 3);
         }
     }
+
+    /** How far {@link #query()} looks when not told. */
+    public static final int DEFAULT_RADIUS = 20;
+
+    /** Start a search over the ground items within {@link #DEFAULT_RADIUS} tiles. See {@link GroundItemQuery}. */
+    public static GroundItemQuery query() { return query(DEFAULT_RADIUS); }
+
+    /** Start a search over the ground items within {@code radius} tiles of you. */
+    public static GroundItemQuery query(int radius) { return new GroundItemQuery(() -> all(radius)); }
 
     /** Every stack within {@code radius} tiles of you, on your floor. */
     public static List<GroundItem> all(int radius) {

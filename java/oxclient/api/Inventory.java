@@ -1,5 +1,8 @@
 package oxclient.api;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import oxclient.Natives;
 
 /**
@@ -25,6 +28,34 @@ public final class Inventory {
 
     /** How many slots the inventory has. */
     public static final int SIZE = 28;
+
+    /** Every item you carry, one per occupied slot, in slot order. Empty when the inventory is not readable. */
+    public static List<Item> items() {
+        int[] flat = Natives.container(CONTAINER);
+        List<Item> out = new ArrayList<>();
+        for (int i = 0; i + 1 < flat.length; i += 2) if (flat[i] >= 0 && flat[i + 1] > 0) out.add(new Item(flat[i], flat[i + 1], i / 2));
+        return out;
+    }
+
+    /** The item in {@code slot} (0..27), or null when that slot is empty. */
+    public static Item item(int slot) {
+        int[] flat = Natives.container(CONTAINER);
+        int i = 2 * slot;
+        if (slot < 0 || i + 1 >= flat.length || flat[i] < 0 || flat[i + 1] <= 0) return null;
+        return new Item(flat[i], flat[i + 1], slot);
+    }
+
+    /**
+     * Start a search over what you carry -- the usual way to find an item:
+     * {@code Inventory.query().withOption("Eat").first()}. See {@link ItemQuery}.
+     */
+    public static ItemQuery query() { return new ItemQuery(Inventory::items); }
+
+    /** The first item named exactly {@code name} (ignoring case), or null. */
+    public static Item first(String name) { return query().named(name).first(); }
+
+    /** True when every slot is empty (false when the inventory cannot be read, so nothing acts on a bad read). */
+    public static boolean isEmpty() { return used() == 0; }
 
     /** The item id in each slot, -1 for empty. Length 0 when the inventory is not readable. */
     public static int[] ids() {

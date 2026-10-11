@@ -5,9 +5,9 @@ import java.util.List;
 /**
  * Finding other players.
  *
- * <p>Deliberately thin. We can see where other players are, what they are animating and their combat
- * level; we cannot see their names, because names live in the game's cache and this client does not read
- * the cache. If you want name tags, that is a real contribution and the README lists it.</p>
+ * <p>Each one is an {@link Entity}: where they stand, what they are animating, their name (PLAYER_NAME_PTR,
+ * verified on client-241-3) and their combat level ({@link Entity#id}, derived but not yet verified live).
+ * Their right-click options are not wired, so {@code interact} on a player returns false.</p>
  */
 public final class Players {
 
@@ -15,6 +15,9 @@ public final class Players {
 
     /** Every visible player except you. */
     public static List<Entity> all() { return Game.players(); }
+
+    /** Start a search over the other visible players. See {@link EntityQuery}. */
+    public static EntityQuery query() { return new EntityQuery(Game::players); }
 
     /** The closest other player, or null when you are alone. */
     public static Entity nearest() {

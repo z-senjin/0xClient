@@ -5,47 +5,33 @@ import java.awt.Point;
 import oxclient.Natives;
 
 /**
- * Doing things.
+ * Walking, and the older ways of clicking things.
  *
- * <p>Every method here goes through the game's own menu-action function -- the same one that runs when
- * you right-click something and pick an option. We never build a network packet. The client builds and
- * sends it, which is why this client does not contain a protocol table and does not break every time
- * the protocol changes.</p>
+ * <p><b>To click a thing, call {@code interact} on it</b>: {@code npc.interact("Attack")},
+ * {@code tree.interact("Chop down")}, {@code item.interact("Eat")} -- see {@link Interactable}. The NPC and
+ * scenery methods here predate that and stay only so existing scripts keep compiling.</p>
  *
- * <p><b>Walking is the exception, and it is the one that works today.</b> The action function is not
- * derived on client-240-6 ({@code DO_ACTION == 0}), so every method here is a no-op returning false --
- * which had auto-walk reporting "cannot act" and never moving. But a human does not walk by calling
- * the action function either: they click the ground. Posted clicks ARE honoured on this build (the
- * autologin plugin's Login and "CLICK HERE TO PLAY" clicks are the proof, seen live 2026-09-06), so
- * {@link #walk} projects the tile and posts a left click on it through {@link Input}. The action path
- * is still PREFERRED and still tried first -- it is exact, it needs no camera, and it will start
- * working the day the offset lands -- but the click is what actually moves the character now.</p>
+ * <p>Every action goes through the client's own menu-action senders (the {@code ACT_*} entries in
+ * {@code client/offsets.hpp}) -- the same code that runs when you pick an option from a right-click menu. We
+ * never build a network packet.</p>
  *
- * <h2>Two things worth knowing before you use this</h2>
+ * <p><b>Walking</b> ({@link #walk}, {@link #walkTo}) tries the client's walk sender first and falls back to a
+ * posted left click on the tile, projected through the game's own camera. For anything further than the
+ * loaded scene use {@link Walker}, which plans a route and walks it a step at a time.</p>
  *
- * <p><b>Actions take world coordinates.</b> The game wants scene coordinates and the conversion happens
- * here, once. If a tile is not in the loaded chunk these methods do nothing and return false, which is
- * the honest answer -- you cannot click a tile the client has not loaded.</p>
+ * <p><b>Actions take world coordinates.</b> A tile that is not in the loaded 104x104 scene cannot be clicked,
+ * and the call says so (false, or {@link WalkResult#NOT_LOADED}) rather than guessing.</p>
  *
- * <p><b>A false can also mean "no action was issued at all".</b> The client's action function could not
- * be derived for this build ({@code DO_ACTION == 0} in {@code client/offsets.hpp}), so every method
- * here except {@link #walk}/{@link #walkTo} is a silent no-op; the boolean return is how you tell.
- * Check it if your plugin must know whether anything actually happened.</p>
- *
- * <p><b>Do not spam them.</b> These run on the overlay's thread, not the game's. That is fine at the
- * pace a human clicks and it is asking for trouble in a tight loop. Every plugin in this repo rate
- * limits itself; yours should too.</p>
+ * <p><b>Do not spam them.</b> Every plugin in this repo rate limits itself, and confirms an action's effect
+ * with {@link Await} before acting again; yours should too.</p>
  */
 public final class Actions {
 
     private Actions() {}
 
-    // The client's own menu action numbers. These were captured by hooking the game's action function
-    // and clicking things by hand -- on an OLDER build. They are NOT re-confirmed on client-240-6,
-    // where the action function itself is still unhooked (DO_ACTION is 0; see client/offsets.hpp,
-    // which names the hook candidates). Treat them as unverified until that hook run happens.
+    // The client's internal menu action numbers, which client/actions.hpp maps onto its ACT_* senders
+    // (offsets.hpp's MENU OPCODES block).
     private static final int OPLOC1  = 3;
-    private static final int OPNPC1  = 9;
     private static final int OP_WALK = 31;
 
     /** The client's game-state value that means "in the world". Anything else must not be clicked at. */
@@ -102,9 +88,9 @@ public final class Actions {
      * turning the camera, "not loaded" by walking closer, and neither is a failure of this API.
      */
     public enum WalkResult {
-        /** The game's own action function walked us. Only possible once DO_ACTION is derived. */
+        /** The client's own walk sender (ACT_WALK) walked us: the usual path wherever that is derived. */
         ACTION,
-        /** A left click was posted on the tile. This is the path in use on client-240-6. */
+        /** A left click was posted on the tile: the fallback where the walk sender is not derived. */
         CLICKED,
         /** That tile is not in the loaded 104x104 scene. Aim at a nearer one. */
         NOT_LOADED,
@@ -130,7 +116,7 @@ public final class Actions {
      * Walk to a world tile, saying how it went.
      *
      * <p>Order is deliberate. The action function first: it is the exact way and it costs one native
-     * call that returns false for free while {@code DO_ACTION} is 0. Then the click: project a point
+     * call that returns false for free on a build where the walk sender is not derived. Then the click: project a point
      * INSIDE the tile at the best ground height we have ({@link Game#heightNear} -- entity heights,
      * since there is no terrain heightmap) and post a left click there. The point is the exact centre
      * only with humanisation off ({@link #setHumanise}); otherwise it is offset by a fraction of a
@@ -266,7 +252,8 @@ public final class Actions {
         Point s = Game.toScene(worldX, worldY);
         if (s == null) return new Aim(null, WalkResult.NOT_LOADED);
 
-        // Preferred path. Free to attempt: false the instant DO_ACTION is 0 (client/offsets.hpp).
+        // Preferred path: the client's walk sender (ACT_WALK). Free to attempt: false at once on a build
+        // where it is not derived (client/offsets.hpp).
         // It walks by itself, so there is no point to hand back -- ACTION as the "refusal" is how the
         // caller is told the walk already happened without a click.
         if (Natives.doAction(s.x, s.y, OP_WALK, 0)) return new Aim(null, WalkResult.ACTION);
@@ -332,20 +319,28 @@ public final class Actions {
     /**
      * Click a piece of scenery -- a tree, a rock, a door -- taking its first option.
      *
+     * @deprecated find it with {@link Scenery#query()} and call {@code interact("Chop down")} on it: by name,
+     *     so it takes the option you mean rather than whichever is first
+     *
      * <p>"First option" is Chop down on a tree and Mine on a rock, so this one method covers most
      * gathering. You need the object's id and the tile it stands on; the README's contribution list has
      * finding those automatically as its top item.</p>
      *
-     * @return false when that tile is not in the loaded scene, or when the action was not issued at
-     *     all ({@code DO_ACTION == 0} for this build -- see {@link oxclient.Natives#doAction})
+     * @return false when that tile is not in the loaded scene, or the action was dropped
      */
+    @Deprecated
     public static boolean object(int objectId, int worldX, int worldY) {
         Point s = Game.toScene(worldX, worldY);
         if (s == null) return false;
         return Natives.doAction(s.x, s.y, OPLOC1, objectId);
     }
 
-    /** Click a piece of scenery at a world point. */
+    /**
+     * Click a piece of scenery at a world point.
+     *
+     * @deprecated use {@code interact} on a {@link Scenery.SceneObject}
+     */
+    @Deprecated
     public static boolean object(int objectId, WorldPoint p) {
         return p != null && object(objectId, p.x(), p.y());
     }
@@ -354,11 +349,12 @@ public final class Actions {
      * Take an NPC's first option -- Attack on anything hostile, but Talk-to on a shopkeeper, so a bot
      * that assumes this always attacks will cheerfully strike up a conversation with a cow.
      *
-     * @return false when the NPC is null, has despawned, or the action was not issued at all ({@code
-     *     DO_ACTION == 0} for this build -- see {@link oxclient.Natives#doAction})
+     * @return false when the NPC is null, has despawned, or the action was dropped
+     * @deprecated call {@code npc.interact("Attack")}: by name, so it never talks to the cow
      */
+    @Deprecated
     public static boolean npc(Entity npc) {
-        return npc != null && Natives.interactNpc(npc.uid(), OPNPC1);
+        return npc != null && npc.interact(1);
     }
 
     /**
@@ -367,14 +363,17 @@ public final class Actions {
      * @param option 1..5; anything else is ignored rather than sent, because an out-of-range opcode
      *               lands on some unrelated action rather than failing
      * @return false when the option was out of range, the NPC is null or has despawned, or the action
-     *     was not issued at all ({@code DO_ACTION == 0} for this build -- see {@link
-     *     oxclient.Natives#doAction})
+     *     was dropped
+     * @deprecated call {@link Entity#interact(int)}
      */
-    public static boolean npc(Entity npc, int option) {
-        if (npc == null || option < 1 || option > 5) return false;
-        return Natives.interactNpc(npc.uid(), OPNPC1 + option - 1);
-    }
+    @Deprecated
+    public static boolean npc(Entity npc, int option) { return npc != null && npc.interact(option); }
 
-    /** Take the NPC's option named {@code name} ("Attack", "Net", "Lure"). False when it has none. */
-    public static boolean npc(Entity npc, String name) { return npc != null && npc(npc, npc.option(name)); }
+    /**
+     * Take the NPC's option named {@code name} ("Attack", "Net", "Lure"). False when it has none.
+     *
+     * @deprecated call {@link Entity#interact(String)}
+     */
+    @Deprecated
+    public static boolean npc(Entity npc, String name) { return npc != null && npc.interact(name); }
 }
