@@ -125,8 +125,8 @@ namespace oxc::overlay {
 
 /// Move and resize the overlay to sit exactly on top of `game`'s client area. `game` may be a child
 /// window (it is, once the host embeds it) -- ClientToScreen walks the parent chain, so the result is
-/// still a screen point. Z-order is NOT touched here: dllmain.cpp's loop pins the overlay just above
-/// the host window, and setting it here would fight that every frame.
+/// still a screen point. Z-order is NOT touched here: pinAbove (called from dllmain.cpp's loop) keeps the
+/// overlay just above the host window.
 inline void followWindow(HWND game) {
     if (!g_overlay.hwnd || !game) return;
     RECT r{};
@@ -135,6 +135,23 @@ inline void followWindow(HWND game) {
     ClientToScreen(game, &tl);
     SetWindowPos(g_overlay.hwnd, nullptr, tl.x, tl.y, r.right - r.left, r.bottom - r.top,
                  SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+/// Keep the overlay directly ABOVE `host` in the z-order, moving only the overlay -- never the host.
+///
+/// Why: the loop used to do the opposite, every frame -- put the HOST directly behind the overlay. The
+/// overlay itself never moves in the z-order, so when the user clicked the client to bring it forward,
+/// the next frame sent it back down behind whatever the overlay sat under, and at launch the client sank
+/// behind other apps (the user, 2026-10-10: "it still is weird about showing in front of other
+/// applications"). Now the client is an ordinary window -- Windows decides where it is, as for any other
+/// app -- and the overlay just follows it. Only touches the z-order when it is wrong, so nothing churns.
+inline void pinAbove(HWND host) {
+    if (!g_overlay.hwnd || !host || !IsWindow(host)) return;
+    HWND above = GetWindow(host, GW_HWNDPREV);            // the window right above the host
+    if (above == g_overlay.hwnd) return;                    // already in place
+    // "insert after X" means "just below X": below the window above the host = just above the host
+    SetWindowPos(g_overlay.hwnd, above ? above : HWND_TOP, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
 }
 
 }  // namespace oxc::overlay

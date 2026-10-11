@@ -40,7 +40,8 @@ public record Need(List<String> anyOf, boolean consumable, Skill skill, List<Int
     /** How many usable members are carried. */
     public int carried() {
         int n = 0;
-        for (int i = 0; i < anyOf.size(); i++) if (usable(i)) n += oxclient.api.Inventory.count(anyOf.get(i));
+        // amounts, not slots: a stack (coins, runes, noted items) is its size (Inventory.amount)
+        for (int i = 0; i < anyOf.size(); i++) if (usable(i)) n += oxclient.api.Inventory.amount(anyOf.get(i));
         return n;
     }
 

@@ -30,7 +30,7 @@
 namespace oxc {
 namespace actions {
 
-enum Kind : int { Walk = 1, Npc = 2, Loc = 3, IfOp = 4, ObjOp = 5, OnItem = 6, OnLoc = 7, OnNpc = 8, OnObj = 9, Resume = 10 };
+enum Kind : int { Walk = 1, Npc = 2, Loc = 3, IfOp = 4, ObjOp = 5, OnItem = 6, OnLoc = 7, OnNpc = 8, OnObj = 9, Resume = 10, Key = 11 };
 
 struct Act {
     int kind = 0;
@@ -85,6 +85,33 @@ struct Varbits {
     std::atomic<int> count{0};
     Varbits() { for (int i = 0; i < kVarbits; ++i) { ids[i].store(-1); values[i].store(-1); } }
 };
+
+// ---------------------------------------------------------------------------------------------------
+// Typing (offsets.hpp, TYPING): one Key action is one keystroke -- keyDown, keyChar, keyUp -- with Shift held
+// around it for a capital. a.a = the character (0 for none), a.b = the virtual key (0 for none), a.c = shift.
+// The render view's hwnd is set by the native (jvm.hpp) that queues the stroke.
+// ---------------------------------------------------------------------------------------------------
+inline std::atomic<std::uintptr_t>& keyView() {
+    static std::atomic<std::uintptr_t> v{0};
+    return v;
+}
+
+using KeyFn = void (*)(void*, int, std::uintptr_t);
+using CharFn = void (*)(void*, int);
+
+/// The render view's input object, checked against its vtable; 0 when anything does not match.
+inline std::uintptr_t keyInputObject() {
+    if (!off::KEY_HANDLER_VTBL) return 0;
+    const HWND view = reinterpret_cast<HWND>(keyView().load());
+    if (!view || !IsWindow(view)) return 0;
+    const std::uintptr_t vs = static_cast<std::uintptr_t>(GetWindowLongPtrW(view, 0));
+    if (!vs || !readable(vs + off::KEY_INPUT_OBJ, 8)) return 0;
+    const std::uintptr_t obj = rdp(vs + off::KEY_INPUT_OBJ);
+    if (!obj || !readable(obj, 8) || rdp(obj) != moduleBase() + off::KEY_HANDLER_VTBL) return 0;
+    return obj;
+}
+
+inline bool keyStroke(const Act& a);
 
 inline Varbits& varbits() {
     static Varbits v;
@@ -167,6 +194,8 @@ inline void pump(CONTEXT*) {
     } else if (a.kind == OnObj) {
         int args[4] = {a.a, a.b, a.c, a.id};
         if (!withSelection(a, off::ACT_ON_OBJ, args)) d.result = -2;
+    } else if (a.kind == Key) {
+        if (!keyStroke(a)) d.result = -2;
     }
     const std::uint32_t i = s.doneHead.load();
     s.done[i % kQueue] = d;
@@ -199,6 +228,7 @@ inline std::uintptr_t senderFor(int kind) {
         case OnLoc: return off::ACT_ON_LOC;
         case OnNpc: return off::ACT_ON_NPC;
         case OnObj: return off::ACT_ON_OBJ;
+        case Key: return off::KEY_HANDLER_VTBL;
         default: return 1;   // Walk/Npc/Loc: covered by unavailable()
     }
 }
@@ -212,6 +242,7 @@ inline const char* kindName(int kind) {
         case OnLoc: return "use item on object (ACT_ON_LOC)";
         case OnNpc: return "use item on NPC (ACT_ON_NPC)";
         case OnObj: return "use item on ground item (ACT_ON_OBJ)";
+        case Key: return "typing (KEY_HANDLER_VTBL)";
         default: return "?";
     }
 }
@@ -270,6 +301,13 @@ inline void tick() {
         else if (a.kind == IfOp) oxc::logf("[actions] item %d in widget 0x%x slot %d option %d: sent\n", a.id, static_cast<unsigned>(a.a), a.b, a.op);
         else if (a.kind == Resume) oxc::logf("[actions] continue/option widget 0x%x slot %d: sent\n", static_cast<unsigned>(a.a), a.b);
         else if (a.kind == ObjOp) oxc::logf("[actions] ground item %d x%d at (%d,%d) option %d: sent\n", a.id, a.qty, a.b, a.c, a.op);
+        else if (a.kind == Key) {
+            // never the character itself: this path may one day carry a password
+            static int typed = 0;
+            if (d.result < 0) oxc::logf("[actions] key: dropped, the game's input object did not check out\n");
+            else if (a.a >= 0x20) { if ((++typed % 10) == 1) oxc::logf("[actions] key: typed a character (%d so far)\n", typed); }
+            else oxc::logf("[actions] key 0x%x: sent\n", a.b);
+        }
         else {
             const char* what = a.kind == OnItem ? "item" : a.kind == OnLoc ? "object" : a.kind == OnNpc ? "NPC" : "ground item";
             if (d.result == -2) oxc::logf("[actions] use item %d on %s: dropped, the selection was not readable\n", a.si, what);
@@ -280,6 +318,23 @@ inline void tick() {
 }
 
 inline int planeOf(const Entity& e) { return e.plane >= 0 ? e.plane : 0; }
+
+/// One keystroke through the game's own keyboard entry. Game thread only (pump).
+inline bool keyStroke(const Act& a) {
+    const std::uintptr_t obj = keyInputObject();
+    if (!obj) return false;
+    const std::uintptr_t* vt = reinterpret_cast<const std::uintptr_t*>(rdp(obj));
+    const auto down = reinterpret_cast<KeyFn>(vt[1]);
+    const auto up = reinterpret_cast<KeyFn>(vt[2]);
+    const auto chr = reinterpret_cast<CharFn>(vt[3]);
+    void* o = reinterpret_cast<void*>(obj);
+    if (a.c) down(o, VK_SHIFT, 0);
+    if (a.b) down(o, a.b, 0);
+    if (a.a) chr(o, a.a);
+    if (a.b) up(o, a.b, 0);
+    if (a.c) up(o, VK_SHIFT, 0);
+    return true;
+}
 
 }  // namespace actions
 
@@ -321,6 +376,16 @@ inline bool walkTo(int sceneX, int sceneY) {
 
 /// Continue a dialogue, or pick a dialogue option: the component (and child, -1 for none) the client itself
 /// sends when it is clicked. Queued; false when dropped.
+/// One keystroke: `ch` the character it types (0 for none), `vk` the key (0 for none), `shift` held around it.
+/// `view` is the game's JagRenderView. Queued; false when dropped.
+inline bool typeKey(HWND view, int ch, int vk, bool shift) {
+    if (!view) return false;
+    actions::keyView().store(reinterpret_cast<std::uintptr_t>(view));
+    actions::Act a;
+    a.kind = actions::Key; a.a = ch; a.b = vk; a.c = shift ? 1 : 0;
+    return actions::submit(a);
+}
+
 inline bool resumeDialog(int widgetId, int slot) {
     if (!clientObj() || widgetId <= 0) return false;
     actions::Act a;

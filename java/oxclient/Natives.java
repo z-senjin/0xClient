@@ -403,6 +403,16 @@ public final class Natives {
     public static native boolean postKey(int vk, boolean down);
 
     /**
+     * One keystroke through the GAME'S OWN keyboard entry (client/actions.hpp typeKey; offsets.hpp TYPING):
+     * keyDown, keyChar, keyUp on the render view's input object, on the game thread -- Shift held for a capital.
+     * {@code ch} is the character typed (0 for none), {@code vk} the virtual key (0: derived from the
+     * character). Unlike {@link #postKey} it does not depend on which window has focus: the game drops posted
+     * keys unless its render view has focus (found 2026-10-10). Queued; false when dropped (the input object
+     * did not check out, or KEY_HANDLER_VTBL was not derived for this build).
+     */
+    public static native boolean keyStroke(int ch, int vk);
+
+    /**
      * Mouse in canvas coordinates (the same space {@link #input} and {@link #viewport} report):
      * action 0 move, 1 left down, 2 left up. Posted clicks ARE honoured on client-240-6: the autologin
      * plugin's "Login" and "Click here to play" clicks are both posted through here and both work

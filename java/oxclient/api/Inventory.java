@@ -117,6 +117,18 @@ public final class Inventory {
         return n;
     }
 
+    /**
+     * The total amount of items with this name, summing stacks: 25 coins in one slot is 25 here and 1 for
+     * {@link #count(String)} (which counts SLOTS). Live 2026-10-10 the toll check read the coins with count and
+     * saw 1, so a bank trip took 25 coins and the walker still thought it could not pay.
+     */
+    public static int amount(String name) {
+        int[] flat = Natives.container(CONTAINER);
+        int n = 0;
+        for (int i = 0; i + 1 < flat.length; i += 2) if (flat[i] >= 0 && Items.named(flat[i], name)) n += Math.max(0, flat[i + 1]);
+        return n;
+    }
+
     /** True when an item with this name is in the inventory. */
     public static boolean contains(String name) { return firstSlot(name) >= 0; }
 

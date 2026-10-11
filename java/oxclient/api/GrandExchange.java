@@ -74,7 +74,42 @@ public final class GrandExchange {
     }
 
     /** True while an offer is being set up (the offer screen shows its "per item" price label). */
-    public static boolean settingUp() { return Interfaces.findContaining(GROUP, "per item") != null; }
+    public static boolean settingUp() {
+        // the panels above the text are checked too (Interfaces.shown): "per item" keeps its own hidden flag clear
+        // on the main screen. The earlier "no slot showing" test was wrong: the slot texts stay visible while an
+        // offer is set up (live 2026-10-10, the sells were picked but never priced)
+        return Interfaces.findContainingShown(GROUP, "per item") != null;
+    }
+
+    /** For the log: where "per item" is and whether it is really on screen. */
+    public static String describeOffer() {
+        for (Interfaces.Line l : Interfaces.text(GROUP))
+            if (l.plain().toLowerCase().contains("per item")) return "\"per item\" at " + Interfaces.describe(l.widgetId()) + ", line " + (l.hidden() ? "hidden" : "shown");
+        return "no \"per item\" text loaded";
+    }
+
+    /** True when any offer slot's text is showing (the main screen, not an offer being set up). */
+    public static boolean slotsShown() {
+        for (Interfaces.Line l : Interfaces.text(GROUP))
+            if (l.component() >= 7 && l.component() <= 9 && !l.hidden() && !l.plain().isEmpty()) return true;
+        return false;
+    }
+
+    /** What offer slot {@code i} shows, its lines joined ("Empty", or an item, a price and a state). */
+    public static String slotText(int i) {
+        StringBuilder b = new StringBuilder();
+        for (Interfaces.Line l : Interfaces.text(GROUP))
+            if (l.component() == 7 + i && !l.hidden() && !l.plain().isEmpty()) b.append(b.length() == 0 ? "" : " | ").append(l.plain());
+        return b.toString();
+    }
+
+    /**
+     * "Abort offer" on slot {@code i}. ASSUMED option 2 of the slot component (option 1 views the offer); NOT
+     * VERIFIED -- the caller checks the slot afterwards and logs what it shows.
+     */
+    public static final int ABORT_OP = 2;
+
+    public static boolean abort(int i) { return Interfaces.click(SLOT0 + i, -1, ABORT_OP); }
 
     /** True when slot {@code i} shows "Empty". */
     public static boolean slotEmpty(int i) {

@@ -30,6 +30,33 @@ public final class Interfaces {
 
         /** Take option {@code op} (1..10) on it -- a button press when op is 1. */
         public boolean click(int op) { return Interfaces.click(widgetId(), child, op); }
+
+        /** Really on screen: not hidden itself, and no panel holding it hidden ({@link #shown}). */
+        public boolean onScreen() { return !hidden && shown(widgetId()); }
+    }
+
+    /**
+     * Is component {@code widgetId} on screen: loaded, and neither it nor any panel above it hidden? A
+     * component keeps its own hidden flag clear while the panel holding it is hidden -- the GE offer screen's
+     * "per item" text read not-hidden on the main screen, and a trip "priced" an offer that was not there for
+     * 14 minutes (live 2026-10-10). Needs the DLL's widgetAbs [8] (hidden anywhere up the chain) and a
+     * derived parent link ([7] complete); without either it falls back to the component's own flag.
+     */
+    public static boolean shown(int widgetId) {
+        final int[] v;
+        try { v = Natives.widgetAbs(widgetId); } catch (UnsatisfiedLinkError e) { return true; }
+        if (v == null || v.length == 0 || v[0] == 0) return false;
+        if (v.length >= 9 && v[7] == 1) return v[8] == 0;
+        return v[5] == 0;
+    }
+
+    /** One line for the log: the component's own and whole-chain hidden state, for checking {@link #shown}. */
+    public static String describe(int widgetId) {
+        int[] v;
+        try { v = Natives.widgetAbs(widgetId); } catch (UnsatisfiedLinkError e) { return "no native"; }
+        if (v == null || v.length == 0 || v[0] == 0) return (widgetId >> 16) + ":" + (widgetId & 0xFFFF) + " not loaded";
+        return (widgetId >> 16) + ":" + (widgetId & 0xFFFF) + " " + v[3] + "x" + v[4] + " own " + (v[5] != 0 ? "hidden" : "shown")
+                + ", chain " + (v.length < 9 ? "n/a (old DLL)" : v[7] == 0 ? "incomplete" : v[8] != 0 ? "hidden" : "shown");
     }
 
     /**
@@ -83,6 +110,17 @@ public final class Interfaces {
     public static Line findContaining(int group, String part) {
         String p = part.toLowerCase();
         for (Line l : text(group)) if (!l.hidden() && l.plain().toLowerCase().contains(p)) return l;
+        return null;
+    }
+
+    /**
+     * Like {@link #findContaining}, but the line must really be on screen ({@link Line#onScreen}: no panel
+     * above it hidden either). Used only by the GE offer check until the chain test is seen right in a log;
+     * then find/findContaining can switch over (dialogs rely on them, so not before).
+     */
+    public static Line findContainingShown(int group, String part) {
+        String p = part.toLowerCase();
+        for (Line l : text(group)) if (!l.hidden() && l.plain().toLowerCase().contains(p) && l.onScreen()) return l;
         return null;
     }
 

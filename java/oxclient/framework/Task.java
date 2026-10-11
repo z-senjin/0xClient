@@ -25,4 +25,7 @@ public interface Task {
 
     /** Called once when the task becomes current (and again after a restart). */
     default void start() {}
+
+    /** A game message that means something ({@link ChatEvent}); called by the picker while the task is current. */
+    default void onEvent(ChatEvent event, String line) {}
 }

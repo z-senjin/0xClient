@@ -40,6 +40,15 @@ public final class Walker {
     private static volatile CollisionMap map;
     private static volatile Map<Integer, List<Transport>> transports = Collections.emptyMap();
     /**
+     * The toll gate as transports ("Open Gate 44050"), by origin: used only by a route planned with the coins
+     * for it, and the ONLY way such a route crosses the gate (its plain steps stay locked, {@link #tollSteps}).
+     * So the route has a transport step there, and the walker walks up to the gate and goes through it before
+     * clicking beyond -- the way it takes stairs. Without this a route crossed the gate as two ordinary tiles,
+     * the walker clicked past the shut gate, and the game walked the character along the fence to the nearest
+     * point on its own side (3264,3202), where it stood (live 2026-10-10).
+     */
+    private static volatile Map<Integer, List<Transport>> tollTransports = Collections.emptyMap();
+    /**
      * Steps the route must NOT take on foot: gates and doors that are transports WITH a requirement (the
      * Al Kharid toll gate wants 10 coins or a quest). The collision map lets you walk through them, so
      * without this the route would lead straight to a gate the character cannot pass -- seen live
@@ -55,6 +64,14 @@ public final class Walker {
      */
     private static final Set<Integer> AVOID_OBJECTS = Set.of(44050, 44051);
 
+    /**
+     * The toll gate's own steps (AVOID_OBJECTS), kept apart from {@link #lockedSteps}: a route may cross them when
+     * it is planned with coins for the toll (10 gp) in the inventory -- the user's choice, 2026-10-09: pay the
+     * Al Kharid toll once the account has gold. Crossing one means paying at the gate ({@code Pay-toll}).
+     */
+    private static volatile Set<Long> tollSteps = Collections.emptySet();
+    public static final int TOLL_COINS = 10;
+
     /** Steps locked at run time (a gate that turned out to charge); added to the planner's locked set. */
     private static final Set<Long> lockedAtRuntime = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private static volatile boolean loading;
@@ -69,10 +86,12 @@ public final class Walker {
                 Thread t = new Thread(() -> {
                     try {
                         CollisionMap m = new CollisionMap(SplitFlagMap.fromResources());
-                        transports = usableTransports();
-                        lockedSteps = lockedSteps();
+                        transports = usableTransports(false);
+                        tollTransports = usableTransports(true);
+                        lockedSteps = lockedSteps(false);
+                        tollSteps = lockedSteps(true);
                         map = m;
-                        System.out.println("[walker] map loaded: " + transports.size() + " transport origins, " + lockedSteps.size() + " locked steps");
+                        System.out.println("[walker] map loaded: " + transports.size() + " transport origins, " + lockedSteps.size() + " locked steps, " + tollSteps.size() + " toll steps");
                     } catch (Throwable e) {
                         loadError = String.valueOf(e);
                         System.out.println("[walker] loading the map failed: " + e);
@@ -89,8 +108,8 @@ public final class Walker {
     /** Why loading failed, or "". */
     public static String loadError() { return loadError; }
 
-    /** Plain transports with no requirements, by packed origin. */
-    private static Map<Integer, List<Transport>> usableTransports() {
+    /** Plain transports with no requirements, by packed origin (toll: only the toll gate's). */
+    private static Map<Integer, List<Transport>> usableTransports(boolean toll) {
         Map<Integer, List<Transport>> out = new HashMap<>();
         Map<Integer, Set<Transport>> all = TransportLoader.loadAllFromResources();
         for (Map.Entry<Integer, Set<Transport>> e : all.entrySet()) {
@@ -100,20 +119,21 @@ public final class Walker {
                 boolean skills = false;
                 for (int lvl : t.getSkillLevels()) if (lvl > 0) { skills = true; break; }
                 if (skills || t.getOrigin() == Transport.UNDEFINED_ORIGIN || t.getDestination() == Transport.UNDEFINED_DESTINATION) continue;
-                if (AVOID_OBJECTS.contains(objectId(t.getObjectInfo()))) continue;
+                if (AVOID_OBJECTS.contains(objectId(t.getObjectInfo())) != toll) continue;
                 out.computeIfAbsent(t.getOrigin(), k -> new ArrayList<>()).add(t);
             }
         }
         return out;
     }
 
-    /** Every adjacent (from, to) step that a transport with a requirement covers, both directions. */
-    private static Set<Long> lockedSteps() {
+    /** Every adjacent (from, to) step that a transport with a requirement covers (toll: the toll gate's), both ways. */
+    private static Set<Long> lockedSteps(boolean toll) {
         Set<Long> out = new java.util.HashSet<>();
         for (Set<Transport> ts : TransportLoader.loadAllFromResources().values()) {
             for (Transport t : ts) {
                 if (t.getOrigin() == Transport.UNDEFINED_ORIGIN || t.getDestination() == Transport.UNDEFINED_DESTINATION) continue;
-                if (!hasRequirement(t) && !AVOID_OBJECTS.contains(objectId(t.getObjectInfo()))) continue;
+                boolean isToll = AVOID_OBJECTS.contains(objectId(t.getObjectInfo()));
+                if (toll ? !isToll : (isToll || !hasRequirement(t))) continue;
                 int o = t.getOrigin(), d = t.getDestination();
                 if (WorldPointUtil.unpackWorldPlane(o) != WorldPointUtil.unpackWorldPlane(d)) continue;
                 int dx = Math.abs(WorldPointUtil.unpackWorldX(o) - WorldPointUtil.unpackWorldX(d));
@@ -170,6 +190,29 @@ public final class Walker {
      * when there is none inside the search box (both points plus a 64-tile margin) or the map is not loaded.
      */
     public static List<Step> findPath(int fromX, int fromY, int fromPlane, int toX, int toY, int toPlane, int arrive) {
+        return findPath(fromX, fromY, fromPlane, toX, toY, toPlane, arrive, canPayToll());
+    }
+
+    /** Is the tile blocked on the collision map (a wall, a tree, water)? False before the map is loaded. */
+    public static boolean blocked(int x, int y, int plane) {
+        CollisionMap m = map;
+        return m != null && m.isBlocked(x, y, plane);
+    }
+
+    /** Coins for the toll gate in the inventory right now. */
+    public static boolean canPayToll() { return Inventory.amount("Coins") >= TOLL_COINS; }
+
+    /**
+     * Does going from a to b need the toll gate -- no route without paying, a route with it? (Al Kharid from
+     * Lumbridge, or the way back.) Two searches; for setting up a trip, not every tick.
+     */
+    public static boolean tollNeeded(int ax, int ay, int az, int bx, int by, int bz, int arrive) {
+        if (map == null) return false;
+        return findPath(ax, ay, az, bx, by, bz, arrive, false).isEmpty() && !findPath(ax, ay, az, bx, by, bz, arrive, true).isEmpty();
+    }
+
+    /** As {@link #findPath(int, int, int, int, int, int, int)}, crossing the toll gate only when {@code payToll}. */
+    public static List<Step> findPath(int fromX, int fromY, int fromPlane, int toX, int toY, int toPlane, int arrive, boolean payToll) {
         CollisionMap m = map;
         if (m == null) return Collections.emptyList();
         final int margin = 64;
@@ -189,6 +232,9 @@ public final class Walker {
         final int[] dy = {1, -1, 0, 0, 1, 1, -1, -1};
         Map<Integer, List<Transport>> tr = transports;
         Set<Long> locked = lockedSteps;
+        // the toll gate's plain steps are always locked; with the coins, the gate is a transport edge instead
+        Set<Long> toll = tollSteps;
+        Map<Integer, List<Transport>> tollTr = payToll ? tollTransports : Collections.emptyMap();
         int goal = -1;
         while (head < tail) {
             int cur = queue[head++];
@@ -200,11 +246,14 @@ public final class Walker {
                 if (nx < minX || ny < minY || nx >= minX + w || ny >= minY + h) continue;
                 int ni = z * area + (ny - minY) * w + (nx - minX);
                 if (parent[ni] != -2 || !canStep(m, x, y, d, z)) continue;
-                if (crossesLocked(locked, x, y, nx, ny, z)) continue;
+                if (crossesLocked(locked, x, y, nx, ny, z) || (!toll.isEmpty() && crossesLocked(toll, x, y, nx, ny, z))) continue;
                 parent[ni] = cur;
                 queue[tail++] = ni;
             }
-            List<Transport> ts = tr.get(WorldPointUtil.packWorldPoint(x, y, z));
+            int here = WorldPointUtil.packWorldPoint(x, y, z);
+            List<Transport> ts = tr.get(here);
+            List<Transport> tt = tollTr.get(here);
+            if (tt != null) { ts = ts == null ? tt : new ArrayList<>(ts); if (ts != tt) ts.addAll(tt); }
             if (ts == null) continue;
             for (Transport t : ts) {
                 int dst = t.getDestination();
@@ -253,7 +302,11 @@ public final class Walker {
     }
 
     /** How a {@link Route#step} went. */
-    public enum Status { ARRIVED, WALKING, LOADING, NO_ROUTE, STUCK }
+    /**
+     * How a {@link Route#step} went. NEED_TOLL: there is no route without the toll gate and you do not carry the
+     * coins for it -- the caller fetches coins (a bank trip toward the place does: BankTrip) and walks again.
+     */
+    public enum Status { ARRIVED, WALKING, LOADING, NO_ROUTE, STUCK, NEED_TOLL }
 
     /**
      * Walking to one world tile. Call {@link #step} once per plugin tick until it says ARRIVED; it decides
@@ -270,12 +323,13 @@ public final class Walker {
         private int anchor, best = Integer.MAX_VALUE, doorTries, lastPlane = -1;
         private Step aim;
         private int lastX, lastY, lead = 3;
-        private long lastClick, lastMove, lastProgress, lastTransport, doorClickAt;
+        private long lastClick, lastMove, lastProgress, lastTransport, doorClickAt, tollAt;
+        private int tollTries;
         /** Clicks on each shut door/gate ("id@x,y"), to give up on one that will not open. */
         private final Map<String, Integer> doorClicks = new HashMap<>();
         private static final int DOOR_CLICKS_MAX = 4;
         private String lastDoor = "";
-        private boolean straight;
+        private boolean straight, payToll;
 
         /** To (x, y) on your current floor. */
         public Route(int worldX, int worldY, int arrive) { this(worldX, worldY, -1, arrive); }
@@ -306,9 +360,26 @@ public final class Walker {
             int targetPlane = destPlane < 0 ? mz : destPlane;
             if (mz == targetPlane && Math.max(Math.abs(mx - destX), Math.abs(my - destY)) <= arrive) return Status.ARRIVED;
             if (!ready()) return Status.LOADING;
+            Run.keepOn();                                   // run when energy is over 60% (Run)
+            // through the toll gate: "Open" starts the guard's talk -- continue it and answer "Yes, ok." (pay 10 gp)
+            if (now - tollAt < 20_000 && Dialog.isOpen()) {
+                if (now - lastClick < MIN_CLICK_GAP_MS) return Status.WALKING;
+                lastClick = now;
+                List<String> ops = Dialog.options();
+                if (!ops.isEmpty()) {
+                    log("toll gate guard asks: " + String.join(" / ", ops));
+                    if (!Dialog.choose("yes")) Dialog.choose(1);
+                } else Dialog.continueDialog();
+                // the walk through the gate starts when the talk ends: wait for it like any transport. Live
+                // 2026-10-10 it clicked the gate again the moment the talk ended, while the player was passing
+                lastProgress = now;
+                lastTransport = now;
+                return Status.WALKING;
+            }
 
             if (path == null || mz != lastPlane && !onPath(mx, my, mz)) {
-                path = findPath(mx, my, mz, destX, destY, targetPlane, arrive);
+                payToll = canPayToll();
+                path = findPath(mx, my, mz, destX, destY, targetPlane, arrive, payToll);
                 straight = path.isEmpty();
                 // A straight line only where the map has no data (an instance): where it HAS data, no route
                 // means there is none -- walking straight at it is how a character ends up at a toll gate.
@@ -323,7 +394,14 @@ public final class Walker {
                 aim = null;
             }
             lastPlane = mz;
-            if (path.isEmpty()) return Status.NO_ROUTE;
+            if (path.isEmpty()) {
+                if (!payToll && !findPath(mx, my, mz, destX, destY, targetPlane, arrive, true).isEmpty()) {
+                    log("the way to " + destX + "," + destY + " is through the toll gate; carrying " + Inventory.amount("Coins") + " coins (needs " + TOLL_COINS + ")");
+                    path = null;                                   // plan again once the coins are there
+                    return Status.NEED_TOLL;
+                }
+                return Status.NO_ROUTE;
+            }
             if (mx != lastX || my != lastY) { lastX = mx; lastY = my; lastMove = now; }
 
             // the route step nearest you on your floor, only ever moving forward
@@ -348,7 +426,7 @@ public final class Walker {
                 lastProgress = now;
                 if (doorTries > 5) return Status.STUCK;          // a door that will not open
                 if (openDoorOnRoute(mx, my) || openNearbyDoor()) { doorTries++; return Status.WALKING; }
-                log("stuck at " + mx + "," + my + ": no closed door or gate near the route, planning again");
+                log("stuck at " + mx + "," + my + ": no closed door or gate near the route, planning again; objects by the route ahead:" + objectsAhead());
                 path = null;
                 return doorTries++ > 3 ? Status.STUCK : Status.WALKING;
             }
@@ -394,10 +472,12 @@ public final class Walker {
             for (int i = anchor + 1; i <= limit; i++) {
                 Step s = path.get(i);
                 if (s.transport() == null) continue;
+                if (s.x() == mx && s.y() == my && s.plane() == mz) continue;       // already through it
                 Step origin = path.get(i - 1);
                 if (Math.max(Math.abs(origin.x() - mx), Math.abs(origin.y() - my)) <= 2 && origin.plane() == mz) {
                     if (now - lastTransport < 2500) return Status.WALKING;   // give the climb or door time
-                    Taken t = takeTransport(s.transport());
+                    Taken t = takeTransport(s.transport(), payToll, origin, s, tollTries++);
+                    if (t == Taken.CLICKED && isToll(s.transport())) tollAt = now;      // the guard may talk: answer it below
                     if (t == Taken.CLICKED) { lastClick = now; lastTransport = now; lastProgress = now; return Status.WALKING; }
                     boolean door = s.plane() == origin.plane() && Math.max(Math.abs(s.x() - origin.x()), Math.abs(s.y() - origin.y())) <= 1;
                     if (t == Taken.REFUSED) {
@@ -446,7 +526,21 @@ public final class Walker {
          * MISSING when no such object is in sight (an open door has a different id); REFUSED for a gate that
          * offers "Pay-..." (a toll -- the walker does not pay).
          */
-        private static Taken takeTransport(String info) {
+        private static boolean isToll(String info) { return AVOID_OBJECTS.contains(objectId(info)); }
+
+        /**
+         * The object of a transport when its id is not in sight: a wall object ON the transport's own tiles (origin or
+         * destination). The toll gate's ids in the walking data (44050/44051) are stale on this game version -- live
+         * 2026-10-10 the gate was 44598/44599, with no readable name or options (its displayed form depends on a
+         * game variable), so neither the id nor the name matched and the walker stood at the gate.
+         */
+        private static Scenery.SceneObject onTiles(Step a, Step b) {
+            for (Scenery.SceneObject o : Scenery.all(6))
+                if (o.isWall() && ((o.worldX() == a.x() && o.worldY() == a.y()) || (o.worldX() == b.x() && o.worldY() == b.y()))) return o;
+            return null;
+        }
+
+        private static Taken takeTransport(String info, boolean payToll, Step from, Step to, int tries) {
             int id = objectId(info);
             String[] words = info.trim().split(" ");
             String option = words.length > 0 ? words[0] : "";
@@ -455,6 +549,19 @@ public final class Walker {
             // object's name with an option of that text ("Staircase" with "Climb-up")
             Scenery.SceneObject o = Scenery.nearest(8, s -> s.id() == id);
             if (o == null && !name.isEmpty()) o = Scenery.nearest(8, s -> s.name().equalsIgnoreCase(name) && s.option(option) > 0);
+            if (o == null && from != null && to != null && from.plane() == to.plane()) {
+                Scenery.SceneObject w = onTiles(from, to);
+                if (w != null) {
+                    // a nameless object on the transport's tiles: take it by number, option 1. The toll gate: option 1 is
+                    // "Open" -- the guard asks, the walker answers "Yes, okay." -- SEEN WORKING 2026-10-10 ("You pay the
+                    // guards and pass through the gate."); option 2 did nothing that day
+                    int op = 1;
+                    if (isToll(info) && !payToll) { log("transport \"" + info + "\": refused, it charges"); return Taken.REFUSED; }
+                    log("transport \"" + info + "\": not in sight by id; taking " + (w.name().isEmpty() ? "?" : w.name()) + "#" + w.id()
+                            + " on its tile " + w.worldX() + "," + w.worldY() + " by option " + op + " (try " + (tries + 1) + ")");
+                    return w.interact(op) ? Taken.CLICKED : Taken.MISSING;
+                }
+            }
             if (o == null) {
                 StringBuilder near = new StringBuilder();
                 for (Scenery.SceneObject n : Scenery.all(4)) near.append(' ').append(n.name().isEmpty() ? "?" : n.name()).append('#').append(n.id()).append(n.isWall() ? "(wall)" : "");
@@ -462,8 +569,9 @@ public final class Walker {
                 return Taken.MISSING;
             }
             String[] ops = o.options();
-            for (String op : ops) if (op.toLowerCase().startsWith("pay")) { log("transport \"" + info + "\": refused, it charges"); return Taken.REFUSED; }
-            int pick = o.option(option);
+            int pay = tollOption(o);
+            if (pay > 0 && !(payToll && isToll(info))) { log("transport \"" + info + "\": refused, it charges"); return Taken.REFUSED; }
+            int pick = pay > 0 ? pay : o.option(option);                 // the toll gate: pay, and it lets you through
             if (pick < 0) pick = 1;
             log("transport \"" + info + "\": " + o.name() + "#" + o.id() + " at " + o.worldX() + "," + o.worldY() + " option " + pick + " (" + String.join("/", ops) + ")");
             return o.interact(pick) ? Taken.CLICKED : Taken.MISSING;
@@ -513,7 +621,7 @@ public final class Walker {
 
         /** A door or gate that is shut: it offers "Open" (an open one offers "Close"), and is not a toll. */
         private static boolean isShutDoor(Scenery.SceneObject o) {
-            if (o.option("Open") <= 0) return false;
+            if (o.option("Open") <= 0 || AVOID_OBJECTS.contains(o.id())) return false;   // the toll gate is a transport step
             String n = o.name().toLowerCase();
             if (!o.isWall() && !n.contains("gate") && !n.contains("door")) return false;
             return java.util.Arrays.stream(o.options()).noneMatch(op -> op.toLowerCase().startsWith("pay"));
@@ -524,6 +632,13 @@ public final class Walker {
          * {@code at[0]} gets that step's index. On the tile itself, not beside it: a door in a wall the route only
          * walks past is left alone.
          */
+        /** The toll gate's paying option ("Pay-toll(10gp)"), or -1. */
+        private static int tollOption(Scenery.SceneObject o) {
+            String[] ops = o.options();
+            for (int i = 0; i < ops.length; i++) if (ops[i].toLowerCase().startsWith("pay")) return i + 1;
+            return -1;
+        }
+
         private Scenery.SceneObject shutDoorAhead(int[] at, int mz) {
             if (path == null || path.isEmpty()) return null;
             List<Scenery.SceneObject> doors = new ArrayList<>();
@@ -547,6 +662,29 @@ public final class Walker {
                 lockedAtRuntime.add(stepKey(pa, pb));
                 lockedAtRuntime.add(stepKey(pb, pa));
             }
+        }
+
+        /** For the log when stuck: every object with options within a tile of the next route steps, "Gate#883(Open)". */
+        private String objectsAhead() {
+            if (path == null || path.isEmpty()) return " (no route)";
+            StringBuilder b = new StringBuilder();
+            java.util.Set<String> seen = new java.util.HashSet<>();
+            int last = Math.min(path.size() - 1, anchor + 20);
+            for (Scenery.SceneObject o : Scenery.all(30)) {
+                String[] ops = o.options();
+                StringBuilder os = new StringBuilder();
+                for (String op : ops) if (!op.isEmpty()) os.append(os.length() == 0 ? "" : "/").append(op);
+                if (os.length() == 0 && !o.isWall()) continue;           // walls too: a gate can show no name or options
+                if (os.length() == 0) os.append("no options");
+                for (int i = Math.max(0, anchor - 5); i <= last; i++) {
+                    Step st = path.get(i);
+                    if (Math.max(Math.abs(st.x() - o.worldX()), Math.abs(st.y() - o.worldY())) > 1) continue;
+                    String k = o.name() + "#" + o.id() + "@" + o.worldX() + "," + o.worldY();
+                    if (seen.add(k)) b.append(' ').append(o.name().isEmpty() ? "?" : o.name()).append('#').append(o.id()).append(" at ").append(o.worldX()).append(',').append(o.worldY()).append(" (").append(os).append(')');
+                    break;
+                }
+            }
+            return b.length() == 0 ? " none" : b.toString();
         }
 
         private static boolean openNearbyDoor() {

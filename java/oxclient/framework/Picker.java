@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.Random;
 
 import oxclient.api.Game;
+import oxclient.api.Skill;
 import oxclient.api.Skills;
 import oxclient.persist.JsonStore;
 
@@ -57,7 +58,7 @@ public final class Picker {
     private final Map<Need, String> wants = new LinkedHashMap<>();            // item -> for which method
     private TradeTask trade;
     private String lastState = "";
-    private long lastTrade;
+    private long lastTrade, tradeBlockedUntil;
     private boolean tradeOn = true;
     static final long TRADE_EVERY_MS = 30 * 60_000L;
     static final int SELL_AT = 300;                                           // gathered items banked before a selling trip
@@ -77,11 +78,102 @@ public final class Picker {
     }
 
     /** Call every frame; it decides a few times a second. */
+    private long lastChat;
+
+    // ---- watchdog: no experience and no movement for 3 minutes ends the task (user, 2026-10-10)
+
+    static final long WATCHDOG_MS = 3 * 60_000L;
+    private long wdXp = -1, wdSince;
+    private int wdX, wdY, wdPlane, wdHp;
+    private Object wdTask;
+
+    /** Total experience over every skill. */
+    private static long totalXp() {
+        long n = 0;
+        for (oxclient.api.Skill s : oxclient.api.Skill.values()) n += Math.max(0, Skills.experience(s));
+        return n;
+    }
+
+    /**
+     * True when it stepped in. Any task (or a Grand Exchange trip) that gains no experience and does not move
+     * the player for {@link #WATCHDOG_MS} has stalled in a way its own checks did not catch: say what it was
+     * doing, and end it as a failure (retry, another spot, or park, as for any failure).
+     */
+    private boolean watchdog(long now) {
+        Object running = trade != null ? trade : task;
+        oxclient.api.Local me = Game.me();
+        if (running == null || !me.exists()) { wdTask = null; return false; }
+        long xp = totalXp();
+        if (running != wdTask || xp != wdXp || me.worldX() != wdX || me.worldY() != wdY || me.plane() != wdPlane
+                || me.health() != wdHp) {                          // health coming back is progress (resting after a fight)
+            wdTask = running; wdXp = xp; wdX = me.worldX(); wdY = me.worldY(); wdPlane = me.plane(); wdHp = me.health(); wdSince = now;
+            return false;
+        }
+        if (now - wdSince < WATCHDOG_MS) return false;
+        wdSince = now;
+        Task t = (Task) running;
+        String why = "watchdog: no experience and no movement for " + WATCHDOG_MS / 60_000 + " min (" + t.name()
+                + (t.state().isEmpty() ? "" : ", doing: " + t.state()) + ", at " + me.worldX() + "," + me.worldY() + "," + me.plane() + ")";
+        log(why);
+        if (t == trade) { trade = null; lastTrade = now; note = "trade: " + why; save(); return true; }
+        fail(why, now);
+        return true;
+    }
+
+    // ---- death (user, 2026-10-10): re-gear and move on; what was dropped is not fetched back
+
+    private void died(long now) {
+        String what = trade != null ? trade.name() : task != null ? task.name() : "nothing";
+        // the SPOT was dangerous, not the method: avoid the spot (re-gear and move on, the user's choice). Setting
+        // the method aside, as before, parked Fishing on 2026-10-10 as "missing items" when nothing was missing
+        // except what the gravestone held -- the next bank trip finds that out and puts it on the shopping list
+        Place where = task instanceof Spotted sp ? sp.spot() : null;
+        boolean avoid = where != null && !Places.BANKS.contains(where);
+        log("died during " + what + (avoid ? "; avoiding " + where.name() + " for 15 min" : ""));
+        if (avoid) badSpotUntil.put(where.name(), now + PARK_MS);
+        trade = null;
+        task = null;
+        note = "died during " + what;
+        retryAt = now + 5000;
+        history.note("died");
+        save();
+    }
+
+    /** A task's failure, counted toward parking the goal. */
+    private void fail(String why, long now) {
+        note = why;
+        task = null;
+        if (++fails >= FAILS_TO_PARK) park(current, note, now);
+        else retryAt = now + 5000;
+    }
+
     public void tick() {
         if (!Game.ready()) return;
         long now = System.currentTimeMillis();
         if (now < nextTick) return;
         nextTick = now + 150;
+        // the game's own messages ("I can't reach that!", "There is no ammo left in your quiver.") into the log, so
+        // a stalled run says what the game told the player (added 2026-10-10: ranged at chickens did nothing and
+        // the log could not say why)
+        if (now - lastChat > 600) {
+            lastChat = now;
+            // the only reader of the chatbox: every new line is logged, and one that means something (ChatEvent)
+            // is handled -- DEATH here, the rest by the running task
+            for (String l : oxclient.api.Chat.poll()) {
+                System.out.println("[chat] " + l);
+                ChatEvent e = ChatEvent.of(l);
+                if (e == null) continue;
+                if (e == ChatEvent.DEATH) { died(now); return; }
+                if (e == ChatEvent.TRADE_RESTRICTED) {          // no exchange trips until the game allows trading
+                    tradeBlockedUntil = now + ChatEvent.liftsInMs(l);
+                    log("the account may not trade yet: no Grand Exchange trips for " + (tradeBlockedUntil - now) / 60_000 + " min");
+                    save();
+                }
+                Task t = trade != null ? trade : task;
+                if (t != null) t.onEvent(e, l);
+            }
+        }
+        if (watchdog(now)) return;
 
         pruneWants();
         if (trade != null) {                                                  // a Grand Exchange trip runs between stints
@@ -111,6 +203,7 @@ public final class Picker {
             started = false;
             if (task == null) { park(current, "no usable method at level " + Skills.level(current.skill()) + lackingNote(), now); return; }
             log("task: " + task.name());
+            history.method(methodLabel, task instanceof Spotted sp && sp.spot() != null ? sp.spot().name() : "");
         }
         if (!started) { task.start(); started = true; lastState = ""; }
         if (!task.state().equals(lastState)) { lastState = task.state(); if (!lastState.isEmpty()) log("doing: " + lastState); }
@@ -127,6 +220,16 @@ public final class Picker {
             note = threw != null ? threw : task.name() + ": " + task.failure();
             log("failed: " + note);
             if (task instanceof Spotted gt && threw == null) {
+                if (gt.missingSupplies() && CombatTask.isFood(gt.missingItem())) {
+                    // out of food: make some (fishing, then cooking) before fighting again -- the user's choice,
+                    // 2026-10-10. Food stays on the shopping list too (50).
+                    needFood = true;
+                    wants.put(gt.missingItem(), "food");
+                    task = null;
+                    endStint("out of food: making food first");
+                    save();
+                    return;
+                }
                 if (gt.missingSupplies()) {                       // not a failure: use a lower method
                     lackingUntil.put(methodLabel, now + PARK_MS);
                     if (gt.missingItem() != null) wants.put(gt.missingItem(), methodLabel);
@@ -148,6 +251,14 @@ public final class Picker {
         List<Goal> eligible = new ArrayList<>();
         for (Goal g : goals) if (!g.reached() && Methods.has(g.skill()) && !parkedUntil.containsKey(g.key())) eligible.add(g);
         if (eligible.size() > 1) eligible.removeIf(g -> g.key().equals(lastKey));
+        if (needFood && CombatTask.bankFood() >= FOOD_ENOUGH) { needFood = false; log("food in the bank again (" + CombatTask.bankFood() + ")"); }
+        if (needFood) {
+            // raw fish banked -> cook it; otherwise fish
+            boolean raw = false;
+            for (String r : RAW_FISH) raw |= BankCache.count(r) > 0;
+            Skill want = raw ? Skill.COOKING : Skill.FISHING;
+            for (Goal g : eligible) if (g.skill() == want) { eligible = new ArrayList<>(List.of(g)); log("making food: " + want.displayName() + (raw ? " (raw fish in the bank)" : "")); break; }
+        }
         if (eligible.isEmpty()) {
             String n = parkedUntil.isEmpty() ? "every goal with a method is reached" : "every goal is parked";
             if (!n.equals(note)) log(n + "; parked: " + parked());
@@ -155,6 +266,7 @@ public final class Picker {
             return false;
         }
         current = eligible.get(rng.nextInt(eligible.size()));
+        history.start(current);
         log("picked " + current + " (level " + Skills.level(current.skill()) + ") from " + eligible.size() + " eligible");
         int span = stintMaxMinutes - stintMinMinutes;
         stintEnd = now + (stintMinMinutes + (span > 0 ? rng.nextInt(span + 1) : 0)) * 60_000L;
@@ -167,6 +279,11 @@ public final class Picker {
 
     private String methodLabel = "";
 
+    /** Out of food for combat: pick Fishing / Cooking until the bank holds this much cooked food. */
+    private boolean needFood;
+    private static final int FOOD_ENOUGH = 20;
+    private static final List<String> RAW_FISH = List.of("Raw shrimps", "Raw anchovies", "Raw trout", "Raw salmon");
+
     private Task taskFor(Goal g) {
         long now = System.currentTimeMillis();
         lackingUntil.entrySet().removeIf(e -> e.getValue() <= now);
@@ -174,6 +291,7 @@ public final class Picker {
         int level = Skills.level(g.skill());
         Methods.Method m = Methods.forLevel(g.skill(), level, x -> {
             if (lackingUntil.containsKey(x.label())) return false;
+            if (!x.spots().isEmpty() && x.spots().stream().noneMatch(Place::safeNow)) return false;   // too dangerous yet
             List<Need> all = Methods.allNeeds(x);
             if (x.fight() != null && BankCache.known() && !Loadouts.hasWeapon(x.fight().style())) {   // no weapon for the style
                 for (Loadouts.Piece p : Loadouts.upgrades(x.fight().style()))
@@ -191,25 +309,25 @@ public final class Picker {
             // weapon upgrades only, for now: armour for every slot would spend the coins before tools and supplies
             for (Loadouts.Piece p : Loadouts.upgrades(m.fight().style()))
                 if (p.slot() == oxclient.api.Equipment.WEAPON) wants.putIfAbsent(Need.tool(p.name()), "weapon upgrade");
-            return new CombatTask(m.label(), g.skill(), to, spot(m), m.fight());
         }
-        if (m.process() != null)
-            return new ProcessTask(m.label(), g.skill(), to, spot(m), m.process().mode(), m.needs(), m.process().input(),
-                    m.process().objects(), m.process().objectIds());
-        return new GatherTask(m.label(), g.skill(), to, spot(m), m.resource(), m.needs(), bank);
+        return m.task(g.skill(), to, spot(m), bank);
     }
 
-    /** A random spot of the method, leaving out ones that just failed (unless every one did). */
+    /**
+     * A random spot of the method, leaving out ones too dangerous for the combat level (never used) and ones
+     * that just failed (unless every safe one did).
+     */
     private Place spot(Methods.Method m) {
         if (m.spots().isEmpty()) return Places.nearestBank();             // a method done "at the bank" (campfire)
+        List<Place> safe = m.spots().stream().filter(Place::safeNow).toList();
         List<Place> ok = new ArrayList<>();
-        for (Place p : m.spots()) if (!badSpotUntil.containsKey(p.name())) ok.add(p);
-        if (ok.isEmpty()) ok = m.spots();
+        for (Place p : safe) if (!badSpotUntil.containsKey(p.name())) ok.add(p);
+        if (ok.isEmpty()) ok = safe;
         return ok.get(rng.nextInt(ok.size()));
     }
 
     private void endStint(String why) {
-        if (current != null) { lastKey = current.key(); log("stint ended: " + why); }
+        if (current != null) { lastKey = current.key(); log("stint ended: " + why); history.end(why); }
         current = null;
         task = null;
         note = why;
@@ -229,7 +347,7 @@ public final class Picker {
     /** Forget parked goals. */
     public void unpark() { parkedUntil.clear(); parkedWhy.clear(); badSpotUntil.clear(); lackingUntil.clear(); save(); }
 
-    private String lackingNote() { return lackingUntil.isEmpty() ? "" : " (missing items for: " + String.join(", ", lackingUntil.keySet()) + ")"; }
+    private String lackingNote() { return lackingUntil.isEmpty() ? "" : " (set aside for missing items: " + String.join(", ", lackingUntil.keySet()) + ")"; }
 
     /** One line in the OXC_LOG file (System.out goes there), so a test run explains every decision. */
     static void log(String what) { System.out.println("[builder] " + what); }
@@ -242,7 +360,7 @@ public final class Picker {
 
     /** A trip is due: trading is on, none in the last half hour, and something to buy or plenty to sell. */
     private boolean tradeDue(long now) {
-        if (!tradeOn || now - lastTrade < TRADE_EVERY_MS || !BankCache.known()) return false;
+        if (!tradeOn || now - lastTrade < TRADE_EVERY_MS || now < tradeBlockedUntil || !BankCache.known()) return false;
         int products = 0;
         List<String> keep = keepList();
         for (String p : TradeTask.PRODUCTS) if (!keep.contains(p)) products += BankCache.count(p);
@@ -273,9 +391,11 @@ public final class Picker {
         for (Need n : wants.keySet()) {
             String name = n.anyOf().get(n.anyOf().size() - 1);
             for (int i = 0; i < n.anyOf().size(); i++) if (n.usable(i)) { name = n.anyOf().get(i); break; }
-            if (n.anyOf().contains("Trout")) name = "Trout";                  // food: a cheap, decent fish
+            boolean food = CombatTask.isFood(n);
+            if (food) name = "Trout";                                         // food: a cheap, decent fish
             String l = name.toLowerCase();
-            int amount = !n.consumable() ? 1 : l.equals("feather") ? 500 : l.endsWith(" rune") ? 300 : l.endsWith(" arrow") ? 300 : 100;
+            // food: 50 (the user's choice, 2026-10-10; 100 was asked for before)
+            int amount = !n.consumable() ? 1 : food ? 50 : l.equals("feather") ? 500 : l.endsWith(" rune") ? 300 : l.endsWith(" arrow") ? 300 : 100;
             out.add(new TradeTask.Want(name, amount));
         }
         return out;
@@ -291,6 +411,11 @@ public final class Picker {
     }
 
     public Goal current() { return current; }
+
+    /** The stint history (per character), for the panel. */
+    public History history() { return history; }
+
+    private final History history = new History();
 
     public Task task() { return trade != null ? trade : task; }
 
@@ -323,6 +448,8 @@ public final class Picker {
         m.put("stintEnd", stintEnd);
         m.put("last", lastKey);
         m.put("lastTrade", lastTrade);
+        m.put("tradeBlockedUntil", tradeBlockedUntil);
+        m.put("needFood", needFood);
         Map<String, Object> p = new LinkedHashMap<>();
         for (Map.Entry<String, Long> e : parkedUntil.entrySet()) {
             Map<String, Object> one = new LinkedHashMap<>();
@@ -341,6 +468,8 @@ public final class Picker {
         if (s == null || !saveKey.equals(s.get("profile"))) return;
         if (s.get("last") instanceof String l) lastKey = l;
         if (s.get("lastTrade") instanceof Number t) lastTrade = t.longValue();
+        if (s.get("tradeBlockedUntil") instanceof Number t) tradeBlockedUntil = t.longValue();
+        needFood = Boolean.TRUE.equals(s.get("needFood"));
         if (s.get("parked") instanceof Map<?, ?> p) {
             for (Map.Entry<?, ?> e : p.entrySet()) {
                 if (e.getValue() instanceof Map<?, ?> one && one.get("until") instanceof Number u) {

@@ -63,10 +63,19 @@ public final class ProcessTask extends BaseTask implements Spotted {
     private Phase phase = Phase.CHECK;
     private BankTrip trip;
     private Walker.Route route;
-    private long acted, lastAnim, makexAt;
+    private long acted, lastAnim, makexAt, progressAt;
+    private int progressXp = -1, progressCount = -1;
     private int fails;
     private boolean missingSupplies;
-    private int asides;
+    private int asides, tollTrips;
+    private volatile boolean cantLight;
+    private final Defense defense;
+
+    @Override
+    public void onEvent(ChatEvent event, String line) {
+        super.onEvent(event, line);
+        if (event == ChatEvent.CANT_LIGHT) cantLight = true;   // the picker is the chatbox's only reader
+    }
     private Need missingItem;
 
     /**
@@ -91,6 +100,7 @@ public final class ProcessTask extends BaseTask implements Spotted {
         this.input = input;
         this.objects = objects;
         this.keep = BankTrip.names(tools);
+        this.defense = new Defense(spot.name());
     }
 
     @Override public String name() { return label + " to " + target + " at " + spot.name(); }
@@ -108,7 +118,18 @@ public final class ProcessTask extends BaseTask implements Spotted {
         Local me = Game.me();
         if (!me.isIdle()) lastAnim = now;
         if (Skills.level(skill) >= target) return Result.DONE;
-        if (Dialog.canContinue()) { state("continuing a message"); Dialog.continueDialog(); sleep(now, 600, 1000); return Result.CONTINUE; }
+        Result d = defense.tick(now);                     // attacked: fight back or run (Defense), then start over
+        if (d == Result.FAILED) return fail(defense.failure());
+        if (d == Result.CONTINUE) { state("under attack: " + defense.state()); phase = Phase.CHECK; route = null; trip = null; return Result.CONTINUE; }
+        if (Dialog.canContinue()) {
+            state("continuing a message");
+            Dialog.continueDialog();
+            // a level-up message stops whatever the player was doing (cooking, feeding the fire): start it again.
+            // Live 2026-10-10 the campfire stopped at Firemaking 2 and the task sat in "tending the fire".
+            if (phase == Phase.WAIT || phase == Phase.MAKEX) { phase = Phase.ACT; fails = 0; }
+            sleep(now, 600, 1000);
+            return Result.CONTINUE;
+        }
 
         switch (phase) {
             case CHECK -> {
@@ -141,6 +162,14 @@ public final class ProcessTask extends BaseTask implements Spotted {
                 Walker.Status st = route.step();
                 state("walking to " + spot.name());
                 if (st == Walker.Status.ARRIVED) phase = Phase.CHECK;
+                else if (st == Walker.Status.NEED_TOLL) {                 // coins for the toll gate: a bank trip takes them
+                    if (++tollTrips > 2) return fail("no coins for the toll gate on the way to " + spot.name());
+                    List<Need> want = new ArrayList<>(tools);
+                    want.add(input);
+                    trip = new BankTrip(keep, want).toward(spot);
+                    phase = Phase.SUPPLY;
+                    route = null;
+                }
                 else if (st == Walker.Status.NO_ROUTE) return fail("no route to " + spot.name());
                 else if (st == Walker.Status.STUCK) return fail("stuck on the way to " + spot.name());
             }
@@ -164,7 +193,7 @@ public final class ProcessTask extends BaseTask implements Spotted {
                 } else {
                     int tb = tools.isEmpty() ? -1 : tools.get(0).slot();
                     if (tb < 0) { phase = Phase.CHECK; return Result.CONTINUE; }
-                    Chat.poll();                                      // only messages after this click count
+                    cantLight = false;                                // only messages after this click count
                     state("lighting " + oxclient.api.Items.name(Inventory.ids()[in]));
                     Inventory.useOn(tb, in);
                     phase = Phase.WAIT;
@@ -179,7 +208,10 @@ public final class ProcessTask extends BaseTask implements Spotted {
                 if (Interfaces.isOpen(MAKE_X) && !me.isIdle() && lastAnim > makexAt) { phase = Phase.WAIT; acted = now; return Result.CONTINUE; }   // already working
                 if (Interfaces.isOpen(MAKE_X) && now - makexAt < 3500) {
                     state("cooking all");
-                    if (!Interfaces.clickText(MAKE_X, "All")) Keyboard.press(' ');   // "All", else the chooser's default key
+                    // "All" only SETS the quantity -- live 2026-10-10 the chooser stayed up after it (270:12 child 9)
+                    // and nothing cooked. Space then makes the first product at that quantity (the chooser's own key).
+                    Interfaces.clickText(MAKE_X, "All");
+                    Keyboard.press(' ');
                     state(mode == Mode.CAMPFIRE ? "adding all the logs" : "cooking all");
                     phase = Phase.WAIT;
                     acted = now;
@@ -190,15 +222,24 @@ public final class ProcessTask extends BaseTask implements Spotted {
             }
             case WAIT -> {
                 if (input.slot() < 0) { fails = 0; phase = Phase.CHECK; return Result.CONTINUE; }   // all used: bank
+                // progress = experience or the inputs going down. Not the animation alone: the player can hold a
+                // pose after it stops, which kept "tending the fire" going with nothing happening (2026-10-10)
+                int xp = Skills.experience(skill), count = input.carried();
+                if (xp != progressXp || count != progressCount) { progressXp = xp; progressCount = count; progressAt = now; fails = 0; }
+                if (now - progressAt > 6000 && now - acted > 4000 && (mode != Mode.CAMPFIRE || fire() != null)) {
+                    System.out.println("[builder] " + label + ": no experience and no " + input.label() + " used for 6 s (animation "
+                            + me.animation() + "): doing it again");
+                    progressAt = now;
+                    phase = Phase.ACT;
+                    return Result.CONTINUE;
+                }
                 if (mode == Mode.CAMPFIRE) {
                     state(fire() == null ? "lighting a fire" : "tending the fire");
                     if (fire() == null && me.isIdle() && lastAnim < acted && now - acted > 4500) { moveAside(me); phase = Phase.ACT; }   // would not light
                     else if (me.isIdle() && now - lastAnim > 3500 && now - acted > 3500) phase = Phase.ACT;   // out, or the fire died: again
                     else if (lastAnim >= acted) fails = 0;
                 } else if (mode == Mode.LIGHT) {
-                    for (String m : Chat.poll()) {
-                        if (m.toLowerCase().contains("can't light a fire here")) { moveAside(me); phase = Phase.ACT; return Result.CONTINUE; }
-                    }
+                    if (cantLight) { cantLight = false; moveAside(me); phase = Phase.ACT; return Result.CONTINUE; }
                     if (lastAnim >= acted && me.isIdle() && now - lastAnim > 1200) { fails = 0; phase = Phase.ACT; }   // lit; next log
                     else if (lastAnim < acted && now - acted > 4500) { moveAside(me); phase = Phase.ACT; }          // nothing happened
                     state("lighting");

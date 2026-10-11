@@ -964,6 +964,20 @@ inline jboolean JNICALL nPostChar(JNIEnv*, jclass, jint ch) {
     return PostMessageW(t, WM_CHAR, static_cast<WPARAM>(ch), l) ? JNI_TRUE : JNI_FALSE;
 }
 
+/// One keystroke through the game's own keyboard entry (actions.hpp typeKey; offsets.hpp TYPING): `ch` is the
+/// character it types (0 for none: Enter/Escape/Backspace go by key), `vk` the virtual key (0: derived from the
+/// character with VkKeyScanW, Shift held for a capital). Not posted, so it works whatever window has focus.
+inline jboolean JNICALL nKeyStroke(JNIEnv*, jclass, jint ch, jint vk) {
+    HWND view = inputTarget();
+    bool shift = false;
+    int key = vk;
+    if (!key && ch > 0) {
+        const SHORT s = VkKeyScanW(static_cast<WCHAR>(ch));
+        if (s != -1) { key = LOBYTE(s); shift = (HIBYTE(s) & 1) != 0; }
+    }
+    return typeKey(view, ch, key, shift) ? JNI_TRUE : JNI_FALSE;
+}
+
 /// Post WM_KEYDOWN (down) or WM_KEYUP (up) for a virtual key.
 ///
 /// Tab and Backspace go as the bare key pair: live 2026-09-06 that alone moved between the login
@@ -1406,9 +1420,10 @@ inline jintArray JNICALL nWidgetChild(JNIEnv* env, jclass, jint id, jint childIn
 inline jintArray JNICALL nWidgetAbs(JNIEnv* env, jclass, jint id) {
     WidgetAbs a = widgetAbs(id);
     if (!a.ok) return env->NewIntArray(0);
-    jint v[8] = { 1, a.x, a.y, a.w, a.h, a.hidden ? 1 : 0, a.depth, a.complete ? 1 : 0 };
-    jintArray arr = env->NewIntArray(8);
-    if (arr) env->SetIntArrayRegion(arr, 0, 8, v);
+    // [8]: hidden by itself or by an ancestor (meaningful when [7] complete is 1)
+    jint v[9] = { 1, a.x, a.y, a.w, a.h, a.hidden ? 1 : 0, a.depth, a.complete ? 1 : 0, a.hiddenAny ? 1 : 0 };
+    jintArray arr = env->NewIntArray(9);
+    if (arr) env->SetIntArrayRegion(arr, 0, 9, v);
     return arr;
 }
 
@@ -1651,6 +1666,7 @@ inline bool startJvm(const std::wstring& javaHome, const std::wstring& jarPath, 
         // Input into the game -- see the "Input INTO the game" section above nGameState.
         { const_cast<char*>("postChar"),    const_cast<char*>("(I)Z"),    reinterpret_cast<void*>(nPostChar) },
         { const_cast<char*>("postKey"),     const_cast<char*>("(IZ)Z"),   reinterpret_cast<void*>(nPostKey) },
+        { const_cast<char*>("keyStroke"),   const_cast<char*>("(II)Z"),   reinterpret_cast<void*>(nKeyStroke) },
         { const_cast<char*>("postMouse"),   const_cast<char*>("(III)Z"),  reinterpret_cast<void*>(nPostMouse) },
         { const_cast<char*>("inputTarget"), const_cast<char*>("(Z)[I"),   reinterpret_cast<void*>(nInputTarget) },
     };

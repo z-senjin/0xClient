@@ -60,7 +60,8 @@ public final class CombatTask extends BaseTask implements Spotted {
     private final int target;
     private final Place spot;
     private final Fight fight;
-    private final Need food = Need.supply(FOODS, FOOD);
+    private final Need food = Eater.FOOD;
+    private final Eater eater = new Eater();
 
     private Phase phase = Phase.GEAR;
     private EquipTask equip;
@@ -73,11 +74,10 @@ public final class CombatTask extends BaseTask implements Spotted {
     private final java.util.Map<Integer, Long> unreachable = new java.util.HashMap<>();
     private long attackedAt, fightSince, lastFightLog;
     private int fightXp = -1;
-    private int retreats;
+    private int retreats, tollTrips;
     private boolean missingSupplies;
     private Need missingItem;
     private String weaponName = "";
-    private int failedEats, lastEatHp = -1;
     private final java.util.Map<String, Integer> lootTries = new java.util.HashMap<>();
 
     public CombatTask(String label, Skill skill, int target, Place spot, Fight fight) {
@@ -109,6 +109,21 @@ public final class CombatTask extends BaseTask implements Spotted {
         return out;
     }
 
+    private static boolean bankHasFood() {
+        for (String f : FOODS) if (BankCache.count(f) > 0) return true;
+        return false;
+    }
+
+    /** Is this the combat food need (so the picker can make food when it is missing)? */
+    public static boolean isFood(Need n) { return n != null && n.anyOf().equals(FOODS); }
+
+    /** Cooked food the bank holds, all kinds together. */
+    public static int bankFood() {
+        int n = 0;
+        for (String f : FOODS) n += BankCache.count(f);
+        return n;
+    }
+
     /** For a fight that does not need food: only the spell's rune (food is taken only if the bank has some). */
     private List<Need> optionalSupplies() {
         List<Need> out = new ArrayList<>(supplies());
@@ -127,7 +142,7 @@ public final class CombatTask extends BaseTask implements Spotted {
         return k;
     }
 
-    private int hpPercent(Local me) { return me.health() * 100 / Math.max(1, me.maxHealth()); }
+    private int hpPercent(Local me) { return Eater.hpPercent(me); }
 
     @Override
     protected Result step(long now) {
@@ -135,25 +150,20 @@ public final class CombatTask extends BaseTask implements Spotted {
         if (Skills.level(skill) >= target) return Result.DONE;
         if (Dialog.canContinue()) { state("continuing a message"); Dialog.continueDialog(); sleep(now, 600, 1000); return Result.CONTINUE; }
 
-        // eat whenever below half, whatever the phase
+        // eat whenever below half, whatever the phase (Eater: not with the bank open, gives up on an Eat that does nothing)
         int hp = hpPercent(me);
-        // eat below half -- but give up on eating after 3 tries that did not raise health (an Eat that does not
-        // work must not keep it standing in a fight: audit 2026-10-10)
-        // not with the bank open: eating there closed the bank mid-trip and the trip failed with "the bank shows no
-        // contents" (live 2026-10-10); the trip closes the bank when it is done, then this eats
-        if (hp < 50 && food.slot() >= 0 && failedEats < 3 && !oxclient.api.Bank.isOpen()) {
-            if (lastEatHp >= 0 && me.health() <= lastEatHp) failedEats++;
-            else failedEats = 0;
-            lastEatHp = me.health();
-            state("eating");
-            Inventory.interact(food.slot(), "Eat");
-            sleep(now, 1200, 1700);
-            return Result.CONTINUE;
-        }
-        if (hp >= 50) lastEatHp = -1;
-        boolean noFood = food.slot() < 0 || failedEats >= 3;
+        if (eater.eat(me)) { state("eating"); sleep(now, 1200, 1700); return Result.CONTINUE; }
+        boolean noFood = !eater.hasFood();
         if (hp < 33 && noFood && phase == Phase.FIGHT) {
-            if (failedEats >= 3) return fail("eating does nothing (check the inventory Eat option)");
+            if (eater.broken()) return fail("eating does nothing (check the inventory Eat option)");
+            // the bank has no food either: say so, and the picker makes food (fishing, then cooking) before
+            // fighting again -- the user's choice, 2026-10-10. Live that day it walked to Draynor bank, found no
+            // shrimps, then did the same at the chickens and parked Attack.
+            if (BankCache.known() && !bankHasFood()) {
+                missingSupplies = true;
+                missingItem = food;
+                return fail("out of food at " + spot.name() + " (hp " + me.health() + "/" + me.maxHealth() + ")");
+            }
             if (++retreats > 3) return fail("ran out of food " + retreats + " times at " + spot.name());
             trip = new BankTrip(keep(), supplies()).toward(spot);
             phase = Phase.SUPPLY;
@@ -213,6 +223,13 @@ public final class CombatTask extends BaseTask implements Spotted {
                 Walker.Status st = route.step();
                 if (st == Walker.Status.ARRIVED) { phase = Phase.STYLE; return Result.CONTINUE; }
                 state("walking to " + spot.name());
+                if (st == Walker.Status.NEED_TOLL) {                      // coins for the toll gate: a bank trip takes them
+                    if (++tollTrips > 2) return fail("no coins for the toll gate on the way to " + spot.name());
+                    trip = new BankTrip(keep(), fight.needsFood() ? supplies() : optionalSupplies()).toward(spot);
+                    phase = Phase.SUPPLY;
+                    route = null;
+                    return Result.CONTINUE;
+                }
                 if (st == Walker.Status.NO_ROUTE) return fail("no route to " + spot.name());
                 if (st == Walker.Status.STUCK) return fail("stuck on the way to " + spot.name());
             }
@@ -250,6 +267,20 @@ public final class CombatTask extends BaseTask implements Spotted {
             }
         }
         return Result.CONTINUE;
+    }
+
+    @Override
+    public void onEvent(ChatEvent event, String line) {
+        super.onEvent(event, line);
+        long now = System.currentTimeMillis();
+        if (event == ChatEvent.CANT_REACH) {
+            int t = Combat.target();
+            if (t >= 0) { unreachable.put(t, now + 60_000); System.out.println("[builder] the game says it cannot reach " + describe(t) + ": leaving it 60 s"); }
+            fightSince = 0;                               // attack another at the next tick
+            if (phase == Phase.APPROACH) phase = Phase.FIGHT;
+        } else if (event == ChatEvent.NO_AMMO && phase == Phase.FIGHT) {
+            phase = Phase.GEAR;                           // out of arrows: gear up again
+        }
     }
 
     private static String describe(int uid) {
@@ -295,7 +326,9 @@ public final class CombatTask extends BaseTask implements Spotted {
             if (tgt != null && !engaged) {
                 int n = stalls.merge(tgt.uid(), 1, Integer::sum);
                 if (n <= 2) {
-                    System.out.println("[builder] cannot reach " + describe(myTarget) + " from " + me.worldX() + "," + me.worldY() + ": walking up to it (try " + n + ")");
+                    System.out.println("[builder] cannot reach " + describe(myTarget) + " from " + me.worldX() + "," + me.worldY() + ": walking up to it (try " + n + ")"
+                            + "; wielding " + Equipment.name(Equipment.WEAPON) + ", ammo " + Equipment.name(Equipment.AMMO) + " x" + Equipment.amount(Equipment.AMMO)
+                            + ", animation " + me.animation() + ", " + tgt.distance() + " tiles");
                     approach = new Walker.Route(tgt.worldX(), tgt.worldY(), me.plane(), 1);
                     approachUid = tgt.uid();
                     approachUntil = now + 20000;

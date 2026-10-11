@@ -29,7 +29,7 @@ public final class BuyTask extends BaseTask {
 
     @Override public String name() { return "Buy " + quantity + " x " + item; }
 
-    @Override public void start() { step = Step.WALK; route = null; startCount = Inventory.count(item); }
+    @Override public void start() { step = Step.WALK; route = null; startCount = Inventory.amount(item); }
 
     @Override
     protected Result step(long now) {
@@ -60,7 +60,7 @@ public final class BuyTask extends BaseTask {
             case CONFIRM -> { if (!GrandExchange.confirm()) return fail("no Confirm button"); step = Step.WAIT; sleep(now, 3000, 5000); }
             case WAIT -> { step = Step.COLLECT; }
             case COLLECT -> {
-                if (Inventory.count(item) > startCount) { step = Step.CLOSE; return Result.CONTINUE; }
+                if (Inventory.amount(item) > startCount) { step = Step.CLOSE; return Result.CONTINUE; }
                 if (inState(now) > 60000) return fail("the offer did not complete in a minute");
                 GrandExchange.collect();
                 sleep(now, 2500, 4000);

@@ -41,6 +41,7 @@
 #include "selfcheck.hpp"
 #include "actionprobe.hpp"
 #include "combatprobe.hpp"
+#include "winfront.hpp"
 
 namespace {
 
@@ -671,6 +672,10 @@ DWORD WINAPI run(LPVOID module) {
         SetWindowLongPtrW(g_game, GWL_STYLE, WS_CHILD | WS_VISIBLE);
         SetParent(g_game, g_host);
         layoutEmbed();
+        // shown without activating above; the game (now our child) had the foreground and a child cannot
+        // keep it, so raise the host or it can sit behind other applications (winfront.hpp). Before
+        // attachInput, so its queue joins are not touched and giveGameFocus has the last word on focus.
+        oxc::bringToFront(g_host);
         attachInput();
     } else {
         // The launcher embeds the game itself, on its own schedule; there may be nothing to attach to
@@ -861,11 +866,10 @@ DWORD WINAPI run(LPVOID module) {
         } else {
             if (!IsWindowVisible(oxc::g_overlay.hwnd)) ShowWindow(oxc::g_overlay.hwnd, SW_SHOWNOACTIVATE);
             if (!IsWindowVisible(oxc::panel::g_panel.hwnd)) ShowWindow(oxc::panel::g_panel.hwnd, SW_SHOWNOACTIVATE);
-            // Pin the overlay immediately ABOVE the host (insert the host after it in z-order --
-            // hWndInsertAfter means "this window goes behind that one"), not above every window
-            // there is: another app the user focuses covers the overlay like it covers the game.
-            SetWindowPos(g_host, oxc::g_overlay.hwnd, 0, 0, 0, 0,
-                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            // Keep the overlay immediately ABOVE the host, not above every window there is: another
+            // app the user focuses covers the overlay like it covers the game. Only the overlay moves;
+            // the host stays wherever Windows and the user put it (see overlay::pinAbove).
+            oxc::overlay::pinAbove(g_host);
             // The overlay must sit on the game's RENDER CANVAS, not on the frame around it: NXT
             // draws the scene into its JagRenderView child, the projection answers in that child's
             // coordinates, and the frame drifts inside the host (the child was seen at ~(4,30) after

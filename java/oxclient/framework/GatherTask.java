@@ -3,7 +3,6 @@ package oxclient.framework;
 import java.util.List;
 
 import oxclient.api.Actions;
-import oxclient.api.Combat;
 import oxclient.api.Dialog;
 import oxclient.api.Entity;
 import oxclient.api.Game;
@@ -27,10 +26,8 @@ import oxclient.api.Walker;
  * inventory is full, bank everything but the needed items, or drop the products; repeat until the skill
  * reaches the target level. Level-up messages are continued ({@link Dialog#continueDialog}).</p>
  *
- * <p><b>Under attack:</b> when an NPC targets you ({@link Combat#underAttack}, which catches a hit of 0 and
- * the moment it starts) or your hitpoints drop, it walks to the bank (banking as it goes), waits there
- * until health is back over 60%, and walks back. The third attack in one task fails it ("attacked at ..."),
- * and the picker moves to another spot.</p>
+ * <p><b>Under attack:</b> {@link Defense} fights back, or runs and rests, then the loop starts over. Too many
+ * attacks in one task fail it ("attacked ... times at ..."), and the picker moves to another spot.</p>
  *
  * <p>A spot with nothing to gather for 30 seconds fails the task, so a wrong spot does not hold a stint.</p>
  */
@@ -51,10 +48,9 @@ public final class GatherTask extends BaseTask implements Spotted {
         boolean matches(int id, String name) { return ids.contains(id) || names.stream().anyMatch(n -> n.equalsIgnoreCase(name)); }
     }
 
-    private enum Phase { CHECK, TOOL, WALK, FIND, WORK, FULL, FLEE, RECOVER }
+    private enum Phase { CHECK, TOOL, WALK, FIND, WORK, FULL }
 
-    static final int MAX_ATTACKS = 3;
-    static final long NOTHING_MS = 30_000, RECOVER_MAX_MS = 10 * 60_000L;
+    static final long NOTHING_MS = 30_000;
 
     private final String label;
     private final Skill skill;
@@ -69,8 +65,9 @@ public final class GatherTask extends BaseTask implements Spotted {
     private Walker.Route route;
     private BankTrip trip;
     private long lastAnim, clicked;
-    private int dropsSent, attacks, lastHp = -1, lastMax = -1;
-    private long nothingSince, recoverSince;
+    private int dropsSent, tollTrips;
+    private long nothingSince;
+    private final Defense defense;
     private boolean missingSupplies;
     private int deadClicks;
     private Need missingItem;
@@ -88,6 +85,7 @@ public final class GatherTask extends BaseTask implements Spotted {
         this.needs = needs;
         this.keep = BankTrip.names(needs);
         this.bank = bank;
+        this.defense = new Defense(spot.name());
     }
 
     @Override public String name() { return label + " to " + target + " at " + spot.name(); }
@@ -103,18 +101,15 @@ public final class GatherTask extends BaseTask implements Spotted {
     /** Which item that was. */
     public Need missingItem() { return missingItem; }
 
+    @Override
+    public void onEvent(ChatEvent event, String line) {
+        super.onEvent(event, line);
+        if (event == ChatEvent.CANT_REACH) deadClicks += 2;      // that resource is behind something: try others sooner
+    }
+
     private boolean needsMet() {
         for (Need n : needs) if (!n.met()) return false;
         return true;
-    }
-
-    /** Did hitpoints just drop? (Compared with the last tick; a level-up of Hitpoints is not a hit.) */
-    private boolean hit(Local me) {
-        int hp = me.health(), max = me.maxHealth();
-        boolean dropped = lastHp >= 0 && max == lastMax && hp < lastHp;
-        lastHp = hp;
-        lastMax = max;
-        return dropped;
     }
 
     @Override
@@ -122,19 +117,9 @@ public final class GatherTask extends BaseTask implements Spotted {
         Local me = Game.me();
         if (!me.isIdle()) lastAnim = now;
         if (Skills.level(skill) >= target) return Result.DONE;
-        boolean hitNow = hit(me);                         // always called: it tracks the last hitpoints
-        int[] near = Combat.attackersNear(10);
-        if ((hitNow || near.length > 0) && phase != Phase.FLEE && phase != Phase.RECOVER) {
-            if (++attacks >= MAX_ATTACKS) return fail("attacked " + attacks + " times at " + spot.name());
-            phase = Phase.FLEE;
-            trip = new BankTrip(keep, needs);
-            StringBuilder who = new StringBuilder();
-            for (int a : near)
-                for (oxclient.api.Entity e : oxclient.api.Npcs.all()) if (e.uid() == a) who.append(e.name()).append(" #").append(e.id()).append(" (").append(e.distance()).append(" tiles) ");
-            System.out.println("[builder] under attack at " + spot.name() + " by " + (who.length() == 0 ? "nobody targeting (hitpoints dropped)" : who.toString().trim())
-                    + ", hp " + me.health() + "/" + me.maxHealth() + ", attack " + attacks + " of " + MAX_ATTACKS);
-            route = null;
-        }
+        Result d = defense.tick(now);                     // attacked: fight back or run (Defense), then start over
+        if (d == Result.FAILED) return fail(defense.failure());
+        if (d == Result.CONTINUE) { state("under attack: " + defense.state()); phase = Phase.CHECK; route = null; trip = null; return Result.CONTINUE; }
         if (Dialog.canContinue()) { state("continuing a message"); Dialog.continueDialog(); sleep(now, 600, 1000); return Result.CONTINUE; }
 
         switch (phase) {
@@ -159,6 +144,12 @@ public final class GatherTask extends BaseTask implements Spotted {
                 Walker.Status st = route.step();
                 state("walking to " + spot.name());
                 if (st == Walker.Status.ARRIVED) phase = Phase.CHECK;
+                else if (st == Walker.Status.NEED_TOLL) {                 // coins for the toll gate: a bank trip takes them
+                    if (++tollTrips > 2) return fail("no coins for the toll gate on the way to " + spot.name());
+                    trip = new BankTrip(keep, needs).toward(spot);
+                    phase = Phase.TOOL;
+                    route = null;
+                }
                 else if (st == Walker.Status.NO_ROUTE) return fail("no route to " + spot.name());
                 else if (st == Walker.Status.STUCK) return fail("stuck on the way to " + spot.name());
             }
@@ -211,17 +202,6 @@ public final class GatherTask extends BaseTask implements Spotted {
                     dropsSent = 0;
                     phase = Phase.CHECK;
                 }
-            }
-            case FLEE -> {
-                state("under attack: to the bank (" + trip.state() + ")");
-                Result r = trip.tick(now);
-                if (r == Result.FAILED) return fail("fleeing to the bank: " + trip.failure());
-                if (r == Result.DONE) { trip = null; phase = Phase.RECOVER; recoverSince = now; }
-            }
-            case RECOVER -> {
-                int max = Math.max(1, me.maxHealth());
-                if (me.health() * 100 / max >= 60 || now - recoverSince > RECOVER_MAX_MS) { phase = Phase.CHECK; route = null; lastHp = -1; }
-                else { state("waiting at the bank for health (" + me.health() + "/" + max + ")"); sleep(now, 2000, 3000); }
             }
         }
         return Result.CONTINUE;

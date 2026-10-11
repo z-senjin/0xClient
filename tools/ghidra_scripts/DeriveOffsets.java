@@ -1059,6 +1059,77 @@ public class DeriveOffsets extends GhidraScript {
         deriveIfTypeFields();
         deriveGroundItems();
         deriveItemDefs();
+        deriveKeyInput();
+    }
+
+    /**
+     * KEY_INPUT_OBJ and KEY_HANDLER_VTBL: the game's own keyboard entry. The "JagRenderView" window class is
+     * registered with a window procedure (the one function its registration LEAs); that procedure's message
+     * handler loads the render view's input object from [view + N] into RCX and calls the object's message
+     * function -- the one that answers WM_KEYDOWN / WM_CHAR (it splits the messages at 0x100 and 0x200) by calling
+     * the object's virtual keyDown / keyUp / keyChar (slots 1, 2, 3), but only when GetFocus() is the view.
+     * That focus test is why keys POSTED to the game did nothing while the launcher held focus (2026-10-10);
+     * calling the slots directly skips it. The vtable is the .rdata table whose slot 0 (the destructor) stores
+     * the table itself and whose slots 1..3 sit next to the message function.
+     */
+    private void deriveKeyInput() {
+        Set<Function> procs = new LinkedHashSet<>();
+        for (Address sa : findStrings("JagRenderView")) for (Reference r : getReferencesTo(sa)) {
+            Function reg = getFunctionContaining(r.getFromAddress());
+            if (reg == null) continue;
+            for (Instruction i : bodyOf(reg)) {
+                if (!i.getMnemonicString().equals("LEA")) continue;
+                for (Reference x : i.getReferencesFrom()) { Function f = getFunctionAt(x.getToAddress()); if (f != null) procs.add(f); }
+            }
+        }
+        Long objOff = null;
+        Function msg = null;
+        for (Function wp : procs) for (Address c : callees(bodyOf(wp))) {
+            Function h = getFunctionAt(c);
+            if (h == null || h.isThunk() || h.isExternal()) continue;
+            List<Instruction> body = bodyOf(h);
+            for (int k = 0; k < body.size(); k++) {
+                Instruction call = body.get(k);
+                if (!call.getMnemonicString().equals("CALL")) continue;
+                Function g = null;
+                for (Reference x : call.getReferencesFrom()) g = getFunctionAt(x.getToAddress());
+                if (g == null || !comparesWith(g, 0x100) || !comparesWith(g, 0x200)) continue;
+                for (int b = k - 1; b >= 0 && b >= k - 12; b--) {
+                    Matcher m = Pattern.compile("^MOV RCX,qword ptr \\[R\\w+ \\+ 0x([0-9a-f]+)\\]$").matcher(body.get(b).toString());
+                    if (m.matches()) { objOff = Long.parseLong(m.group(1), 16); msg = g; break; }
+                }
+                if (msg != null) break;
+            }
+            if (msg != null) break;
+        }
+        if (msg == null) { notes.add("KEY_INPUT_OBJ: no JagRenderView handler hands [view + N] to a WM_CHAR function"); return; }
+        put("KEY_INPUT_OBJ", objOff, "the JagRenderView message handler passes [view + N] to the WM_KEYDOWN/WM_CHAR function rva 0x" + Long.toHexString(rva(msg.getEntryPoint())));
+        long g = rva(msg.getEntryPoint());
+        List<Long> tables = new ArrayList<>();
+        for (MemoryBlock b : currentProgram.getMemory().getBlocks()) {
+            if (!b.isInitialized() || b.isExecute() || !b.getName().equals(".rdata")) continue;
+            for (Address a = b.getStart(); a.compareTo(b.getEnd().subtract(32)) < 0; a = a.add(8)) {
+                try {
+                    long[] v = new long[4];
+                    for (int k = 0; k < 4; k++) v[k] = currentProgram.getMemory().getLong(a.add(8L * k)) - base;
+                    boolean near = true;
+                    for (int k = 1; k < 4; k++) near &= Math.abs(v[k] - g) < 0x4000 && fnAt(v[k]) != null;
+                    if (!near || fnAt(v[0]) == null) continue;
+                    boolean self = false;
+                    for (Instruction i : bodyOf(fnAt(v[0]))) for (Reference x : i.getReferencesFrom()) self |= x.getToAddress().equals(a);
+                    if (self) tables.add(rva(a));
+                } catch (Exception e) { /* unreadable */ }
+            }
+        }
+        if (tables.size() == 1) put("KEY_HANDLER_VTBL", tables.get(0), "the only .rdata table whose destructor stores it and whose slots 1..3 sit by the WM_CHAR function: keyDown/keyUp/keyChar");
+        else notes.add("KEY_HANDLER_VTBL: " + tables.size() + " candidate tables -- not derived");
+    }
+
+    /** Does the function compare something with this constant (CMP reg/mem, imm)? */
+    private boolean comparesWith(Function f, long imm) {
+        String h = "0x" + Long.toHexString(imm);
+        for (Instruction i : bodyOf(f)) if (i.getMnemonicString().equals("CMP") && i.toString().endsWith("," + h)) return true;
+        return false;
     }
 
     private List<Instruction> bodyOf(Function f) {

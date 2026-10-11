@@ -32,6 +32,12 @@ public final class BankTrip {
     private Step step = Step.GO;
     private Walker.Route route;
     private Place bankPlace, toward;
+    private boolean tollChecked;
+
+    /** Coins carried for the toll gate (10 gp each way) on a trip past it. */
+    static final int TOLL_PURSE = 20;
+    /** A point outside the toll gate (Lumbridge): a bank from which it needs the toll is past the gate. */
+    private static final int[] OUTSIDE = {3222, 3218, 0};
     private long waitUntil, stepSince, lastChange;
     private int lastUsed = -1, openTries;
     private int lastX = -1, lastY = -1;
@@ -52,6 +58,28 @@ public final class BankTrip {
 
     /** Use the bank on the way to {@code spot} (shortest walk to the bank and on to it), not just the nearest. */
     public BankTrip toward(Place spot) { this.toward = spot; return this; }
+
+    /**
+     * Coins for the Al Kharid toll gate, ONLY on trips past it (the user's choice, 2026-10-10): when the walk from
+     * this bank to the spot needs the toll, or this bank is itself past the gate (so whatever comes next has to pay
+     * to leave). Then coins are not deposited, and are topped up to {@link #TOLL_PURSE} if the bank has them.
+     */
+    private void tollCoins(int bx, int by, int bz) {
+        boolean out = toward != null && Walker.tollNeeded(bx, by, bz, toward.x(), toward.y(), toward.plane(), Math.max(1, toward.radius()));
+        boolean inside = Walker.tollNeeded(bx, by, bz, OUTSIDE[0], OUTSIDE[1], OUTSIDE[2], 3);
+        if (!out && !inside) return;
+        keep.add("Coins");
+        int carried = Inventory.amount("Coins");
+        if (carried >= TOLL_PURSE) return;
+        if (BankCache.known() && BankCache.count("Coins") < TOLL_PURSE - carried) {
+            System.out.println("[builder] the toll gate is on this trip but the bank has too few coins (" + BankCache.count("Coins") + ")");
+            return;
+        }
+        // FIRST: a withdraw-all of the trip's supplies fills the inventory, and live (2026-10-10) the coins then did
+        // not fit ("You don't have enough inventory space") and the trip went round again and again
+        want.add(0, Need.supply(List.of("Coins"), TOLL_PURSE));
+        System.out.println("[builder] the toll gate is on this trip" + (inside ? " (this bank is past it)" : "") + ": taking " + TOLL_PURSE + " coins");
+    }
 
     /** Every name part of these needs (what a trip for them should keep in the inventory). */
     public static List<String> names(List<Need> needs) {
@@ -89,11 +117,16 @@ public final class BankTrip {
 
     private Task.Result go(long now) {
         Scenery.SceneObject booth = Scenery.nearest(15, o -> Bank.bankOption(o) > 0);
-        if (booth != null) { to(Step.OPEN, now); return Task.Result.CONTINUE; }
+        if (booth != null) {
+            if (!tollChecked && Walker.ready()) { tollChecked = true; Local me = Game.me(); tollCoins(me.worldX(), me.worldY(), me.plane()); }
+            to(Step.OPEN, now);
+            return Task.Result.CONTINUE;
+        }
         if (bankPlace == null) {
             bankPlace = toward != null ? Places.bankOnTheWay(toward) : Places.nearestBank();
             System.out.println("[builder] bank for this trip: " + bankPlace.name() + (toward != null ? " (on the way to " + toward.name() + ")" : " (nearest)"));
         }
+        if (!tollChecked && Walker.ready()) { tollChecked = true; tollCoins(bankPlace.x(), bankPlace.y(), bankPlace.plane()); }
         state = "walking to " + bankPlace.name();
         if (route == null) route = new Walker.Route(bankPlace.x(), bankPlace.y(), bankPlace.plane(), 3);
         Walker.Status st = route.step();

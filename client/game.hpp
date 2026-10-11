@@ -822,6 +822,10 @@ inline const WidgetTreeScan& widgetLink(bool rescan = false) {
 struct WidgetAbs {
     int  x = 0, y = 0, w = 0, h = 0;
     bool hidden = false;
+    bool hiddenAny = false;  // hidden itself OR any ancestor hidden: what the screen actually shows. A
+                             // component keeps its own flag clear while the panel holding it is hidden
+                             // (the GE offer screen's "per item" text read visible on the main screen,
+                             // live 2026-10-10), so "is it on screen" needs the whole chain
     int  depth = 0;          // ancestors summed
     bool complete = false;   // the walk reached a root -- x/y are a canvas position
     bool ok = false;         // the id resolved at all
@@ -837,6 +841,7 @@ inline WidgetAbs widgetAbs(int id) {
     a.w      = rd<std::int32_t>(w + off::IFTYPE_WIDTH);
     a.h      = rd<std::int32_t>(w + off::IFTYPE_HEIGHT);
     a.hidden = rd<std::uint8_t>(w + off::IFTYPE_HIDDEN) != 0;
+    a.hiddenAny = a.hidden;
 
     const WidgetTreeScan& s = widgetLink();
     if (!s.usable()) return a;                       // complete stays 0: Java refuses, nothing is drawn
@@ -857,6 +862,7 @@ inline WidgetAbs widgetAbs(int id) {
             if (px < -8192 || px > 8192 || py < -8192 || py > 8192) return a;   // torn read
             a.x += px;
             a.y += py;
+            a.hiddenAny |= rd<std::uint8_t>(p + off::IFTYPE_HIDDEN) != 0;
             seen = pid;
             pid = rd<std::int32_t>(p + s.parentIdOff, -1);
         }
@@ -873,6 +879,7 @@ inline WidgetAbs widgetAbs(int id) {
         if (px < -8192 || px > 8192 || py < -8192 || py > 8192) return a;
         a.x += px;
         a.y += py;
+        a.hiddenAny |= rd<std::uint8_t>(p + off::IFTYPE_HIDDEN) != 0;
         seen = p;
         p = rdp(p + s.parentPtrOff);
     }

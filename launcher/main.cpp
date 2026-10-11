@@ -44,6 +44,7 @@
 #include "accounts/jagex_auth.hpp"
 #include "accounts/jagex_auth_window.hpp"
 #include "accounts/osclient_launcher.hpp"
+#include "winfront.hpp"     // client/: shared with the DLL's own host window
 
 namespace {
 
@@ -797,6 +798,9 @@ void embedGame(HWND game) {
                     "keyboard focus stays with the game's queue\n", GetLastError());
     layoutEmbed();
     ShowWindow(game, SW_SHOW);
+    // The game, now our child, held the foreground; a child cannot keep it, so raise our window or it
+    // can end up behind other applications (client/winfront.hpp). The game's queue stays joined.
+    oxc::bringToFront(g_main, gameTid);
     setPhase(Phase::Embedded, L"");
 }
 

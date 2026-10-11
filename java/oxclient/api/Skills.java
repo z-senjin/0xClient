@@ -61,4 +61,17 @@ public final class Skills {
         for (Skill s : Skill.values()) sum += level(s);
         return sum;
     }
+
+    /**
+     * Your combat level from your real (unboosted) levels, by the game's published formula: a quarter of
+     * Defence + Hitpoints + half Prayer, plus 0.325 times the best of melee (Attack + Strength), ranged
+     * (1.5 x Ranged) or magic (1.5 x Magic). A fresh account is 3.
+     */
+    public static int combatLevel() {
+        double base = 0.25 * (level(Skill.DEFENCE) + level(Skill.HITPOINTS) + level(Skill.PRAYER) / 2);
+        double melee = 0.325 * (level(Skill.ATTACK) + level(Skill.STRENGTH));
+        double range = 0.325 * (level(Skill.RANGED) * 3 / 2);
+        double mage = 0.325 * (level(Skill.MAGIC) * 3 / 2);
+        return (int) Math.floor(base + Math.max(melee, Math.max(range, mage)));
+    }
 }

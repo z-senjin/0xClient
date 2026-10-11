@@ -186,6 +186,23 @@ inline std::uintptr_t ACT_OBJ_OP = 0;
 // one-packet sender. NOT VERIFIED LIVE.
 inline std::uintptr_t ACT_RESUME = 0;
 
+// TYPING: the game's own keyboard entry, so text reaches it without posting window messages.
+//
+// The "JagRenderView" window's message handler passes the view's input object -- [view struct + KEY_INPUT_OBJ],
+// the view struct being GetWindowLongPtr(view, 0) -- to one message function, which turns WM_KEYDOWN, WM_KEYUP
+// and WM_CHAR into calls to the object's virtual keyDown(obj, vk), keyUp(obj, vk) and keyChar(obj, ch) (slots 1,
+// 2, 3 of KEY_HANDLER_VTBL; each takes the object's own mutex). It does so ONLY when GetFocus() is the view --
+// so keys posted to the game did nothing whenever the launcher held focus: nothing reached the GE search
+// (live 2026-10-10) and posted Space did not continue a dialogue (2026-10-09). 0xClient calls the three slots
+// itself, on the game thread (actions.hpp, kind Key). WM_CHAR first maps the byte through a Windows-1252 table
+// (rva 0xcfb9c0 on 241-3), which is the identity below 0x80, so plain ASCII goes to keyChar unchanged.
+// HOW FOUND (client-241-3, 2026-10-10, static): RegisterClassExA("JagRenderView") at 0x6d2070 -> window proc
+// 0x6d1e00 -> handler 0x6d1ec0 (MOV RCX,[RDI+0x10]; CALL 0xadcbd0) -> 0xadcbd0 (GetFocus test, virtual calls
+// +8/+0x10/+0x18); vtable 0xc4d288 = {destructor 0xadd720, keyDown 0xade250, keyUp 0xade390, keyChar 0xade4c0}.
+// AUTOMATED (deriveKeyInput). NOT VERIFIED LIVE.
+inline std::uintptr_t KEY_INPUT_OBJ = 0x10;     // render view struct -> the input object
+inline std::uintptr_t KEY_HANDLER_VTBL = 0;     // rva of the input object's vtable (guards the calls)
+
 // USE ITEM ON ... ("Use" an inventory item, then click the target). The client keeps the item you picked
 // with "Use" in a SELECTION, and each target sender reads it from there rather than taking it as an
 // argument:

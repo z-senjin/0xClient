@@ -124,6 +124,8 @@ public final class AccountBuilder extends Plugin {
         Goal goal = picker.current();
         lines.add("goal", goal == null ? "none" : goal + " (now " + oxclient.api.Skills.level(goal.skill()) + ")");
         if (goal != null) lines.add("stint left", minutes(picker.stintLeft()));
+        long xph = picker.history().xpPerHour();
+        if (xph >= 0) lines.add("xp/hour", String.format("%,d", xph));
         Task t = picker.task();
         if (t != null) {
             lines.add(t.name());
@@ -137,6 +139,7 @@ public final class AccountBuilder extends Plugin {
         List<String> unbuilt = picker.unbuilt();
         if (!unbuilt.isEmpty()) lines.add("not built yet", unbuilt.size() + " skills");
         if (!Walker.loadError().isEmpty()) lines.add("walking map: " + Walker.loadError(), "", Theme.WARN);
+        for (String h : picker.history().recent(3)) lines.add("past: " + h);
         Hud.panel(g, 12, 12, "Account Builder", lines);
     }
 

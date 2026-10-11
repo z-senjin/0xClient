@@ -81,6 +81,18 @@
       "kind": "code",
       "evidence": "the only thunk that unpacks {widget, slot}, resolves the component and tail-jumps into a one-packet sender: rva 0x38ce20"
     },
+    "KEY_INPUT_OBJ": {
+      "value": 16,
+      "status": "derived",
+      "kind": "field",
+      "evidence": "the JagRenderView message handler passes [view + N] to the WM_KEYDOWN/WM_CHAR function rva 0xadcbd0"
+    },
+    "KEY_HANDLER_VTBL": {
+      "value": 12898952,
+      "status": "derived",
+      "kind": "global",
+      "evidence": "the only .rdata table whose destructor stores it and whose slots 1..3 sit by the WM_CHAR function: keyDown/keyUp/keyChar"
+    },
     "TARGET_STATE": {
       "value": 4273136,
       "status": "verified",

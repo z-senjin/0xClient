@@ -20,8 +20,21 @@ public abstract class BaseTask implements Task {
 
     @Override
     public final Result tick(long now) {
+        if (!gameSaid.isEmpty()) return fail("the game says: " + gameSaid);
         if (now < waitUntil) return Result.CONTINUE;
         return step(now);
+    }
+
+    /** A game message that ends the task (LEVEL_TOO_LOW); set by {@link #onEvent}, acted on at the next tick. */
+    private String gameSaid = "";
+
+    /**
+     * The default reaction to game messages: a level the method does not have ends the task (the picker then
+     * tries again, sets the method aside or parks the goal). Tasks that care about more call this too.
+     */
+    @Override
+    public void onEvent(ChatEvent event, String line) {
+        if (event == ChatEvent.LEVEL_TOO_LOW) gameSaid = line.replaceFirst("^\\[\\d+:\\d+\\]\\s*", "");
     }
 
     /** One decision; called only when not waiting. */

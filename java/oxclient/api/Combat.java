@@ -40,7 +40,19 @@ public final class Combat {
         int[] all = attackers();
         if (all.length == 0) return all;
         java.util.List<Entity> npcs = Npcs.all();
-        return java.util.Arrays.stream(all).filter(u -> npcs.stream().anyMatch(e -> e.uid() == u && e.distance() <= tiles)).toArray();
+        return java.util.Arrays.stream(all).filter(u -> npcs.stream().anyMatch(e -> e.uid() == u && e.distance() <= tiles && canFight(e))).toArray();
+    }
+
+    /**
+     * Can this NPC fight at all? One without an "Attack" option cannot -- it targets you because it is talking to
+     * you: live 2026-10-10 the toll gate's Border Guard faced the player during the toll talk and a fishing trip
+     * "fled" from it three times and gave up. When the options cannot be read at all, assume it can.
+     */
+    public static boolean canFight(Entity e) {
+        String[] ops = e.options();
+        boolean any = false;
+        for (String o : ops) if (o != null && !o.isEmpty()) { any = true; if (o.equalsIgnoreCase("Attack")) return true; }
+        return !any;
     }
 
     /** True when an NPC is targeting you. */

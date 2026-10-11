@@ -44,7 +44,7 @@ public final class TradeTask extends BaseTask {
 
     static final long WAIT_MS = 90_000;
 
-    private enum Step { WALK, BANK_OPEN, BANK, GE_OPEN, SELL, BUY, WAIT, CLOSE }
+    private enum Step { WALK, BANK_OPEN, BANK, GE_OPEN, ABORT, SELL, BUY, WAIT, CLOSE }
 
     /** An item to buy, and how many. */
     public record Want(String name, int amount) {}
@@ -57,6 +57,14 @@ public final class TradeTask extends BaseTask {
     private final List<String> sold = new ArrayList<>(), bought = new ArrayList<>(), skipped = new ArrayList<>();
 
     private final List<String> keep;
+    private volatile boolean restricted;
+
+    /** The account may not trade yet (a new account): stop offering and close the exchange. */
+    @Override
+    public void onEvent(ChatEvent event, String line) {
+        super.onEvent(event, line);
+        if (event == ChatEvent.TRADE_RESTRICTED) restricted = true;
+    }
 
     /** @param keep items never to sell (the inputs of skills still training) */
     public TradeTask(List<Want> buys, List<String> keep) { this.buys = new ArrayList<>(buys); this.keep = List.copyOf(keep); }
@@ -74,6 +82,12 @@ public final class TradeTask extends BaseTask {
     protected Result step(long now) {
         Local me = Game.me();
         if (Dialog.canContinue()) { Dialog.continueDialog(); sleep(now, 600, 900); return Result.CONTINUE; }
+        // live 2026-10-10 a new account went on trying to sell after the game said it may not trade yet
+        if (restricted && (step == Step.ABORT || step == Step.SELL || step == Step.BUY || step == Step.WAIT)) {
+            restricted = false;
+            skipped.add("everything (the account may not trade yet)");
+            to(Step.CLOSE, now);
+        }
         switch (step) {
             case WALK -> {
                 Place ge = Places.GRAND_EXCHANGE;
@@ -98,13 +112,14 @@ public final class TradeTask extends BaseTask {
             }
             case BANK -> { return bank(now); }
             case GE_OPEN -> {
-                if (tries > 0 && GrandExchange.isOpen() && now - stepAt > 1500 && settled(me, now)) { to(Step.SELL, now); return Result.CONTINUE; }
+                if (tries > 0 && GrandExchange.isOpen() && now - stepAt > 1500 && settled(me, now)) { to(Step.ABORT, now); return Result.CONTINUE; }
                 if (++tries > 5) return fail("the exchange never opened");
                 state("opening the exchange");
                 if (!GrandExchange.open()) return fail("no Grand Exchange booth in sight");
                 stepAt = now;
                 sleep(now, 2000, 2800);
             }
+            case ABORT -> { return abortOld(now); }
             case SELL -> { return sell(now); }
             case BUY -> { return buy(now); }
             case WAIT -> {
@@ -153,10 +168,38 @@ public final class TradeTask extends BaseTask {
         return Result.CONTINUE;
     }
 
+    private final int[] aborts = new int[3];
+
+    /**
+     * Offers already in the slots (left from an earlier trip, or placed by hand) are aborted and collected
+     * first, so the trip has its slots -- the user's choice, 2026-10-10 (a trip found every slot taken).
+     */
+    private Result abortOld(long now) {
+        if (GrandExchange.canCollect()) { state("collecting"); GrandExchange.collect(); sleep(now, 1200, 1600); return Result.CONTINUE; }
+        for (int i = 0; i < 3; i++) {
+            if (GrandExchange.slotEmpty(i)) continue;
+            String shows = GrandExchange.slotText(i);
+            if (aborts[i] >= 2) continue;                      // two tries: leave it (the option number is unverified)
+            if (aborts[i] > 0) System.out.println("[builder] slot " + i + " still shows \"" + shows + "\" after abort try " + aborts[i]);
+            aborts[i]++;
+            state("aborting the old offer in slot " + i + " (" + shows + ")");
+            GrandExchange.abort(i);
+            sleep(now, 1500, 2000);
+            return Result.CONTINUE;
+        }
+        to(Step.SELL, now);
+        return Result.CONTINUE;
+    }
+
     private int pendingOffer = -1;      // inventory slot to offer once the Sell screen is up
+    private int backs;
     private boolean priced;
 
+    private String lastOfferLog = "";
+
     private Result sell(long now) {
+        String d = GrandExchange.describeOffer();
+        if (!d.equals(lastOfferLog)) { lastOfferLog = d; System.out.println("[ge] " + d); }   // checks Interfaces.shown live
         if (GrandExchange.settingUp()) {                       // an offer is on screen: price it and confirm, once
             if (!priced && now - stepAt > 1500) {
                 state("pricing at guide -10%");
@@ -166,6 +209,11 @@ public final class TradeTask extends BaseTask {
                 stepAt = now;
                 sleep(now, 1500, 2000);
             } else if (priced && now - stepAt > 2500) {       // Confirm did not take: back out
+                if (++backs > 3) {                             // Back does not leave it either: stop selling
+                    System.out.println("[builder] the sell screen will not take an offer or go back; stopping sales");
+                    to(Step.BUY, now);
+                    return Result.CONTINUE;
+                }
                 Interfaces.click(GrandExchange.BACK, -1, 1);
                 priced = false;
                 sleep(now, 900, 1200);
@@ -225,7 +273,19 @@ public final class TradeTask extends BaseTask {
         if (confirmed) { bought.add(w.name()); next(); return Result.CONTINUE; }    // the offer went in
         if (now - stepAt < 1200) return Result.CONTINUE;
         if (searched) {                                         // typed last tick: pick the result
-            if (!GrandExchange.pickResult(w.name())) { skipped.add(w.name() + " (not in the search)"); Keyboard.escape(); next(); }
+            if (!GrandExchange.pickResult(w.name())) {
+                // typing does not reach the game's search (live 2026-10-10: nothing appeared in the box; posted keys
+                // also failed to continue a dialogue earlier). Leave the offer and skip every buy this trip rather
+                // than typing the next name into a prompt that is still open.
+                System.out.println("[builder] buying " + w.name() + ": no search result (typed text did not reach the game); skipping the buys");
+                Interfaces.click(GrandExchange.BACK, -1, 1);
+                for (Want rest : buys) skipped.add(rest.name() + " (search typing does not work yet)");
+                buys.clear();
+                searched = false;
+                waitStart = now;
+                to(Step.WAIT, now);
+                return Result.CONTINUE;
+            }
             searched = false;
             stepAt = now;
             return Result.CONTINUE;
