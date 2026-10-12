@@ -34,8 +34,8 @@ public enum Profile {
 
     public List<Goal> goals() {
         List<Goal> out = new ArrayList<>();
-        for (Skill s : F2P_SKILLS) out.add(new Goal(s, 99));
-        if (members) for (Skill s : MEMBERS_SKILLS) out.add(new Goal(s, 99));
+        for (Skill s : F2P_SKILLS) out.add(new SkillGoal(s, 99));
+        if (members) for (Skill s : MEMBERS_SKILLS) out.add(new SkillGoal(s, 99));
         return out;
     }
 

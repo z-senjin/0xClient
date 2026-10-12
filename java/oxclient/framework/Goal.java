@@ -1,5 +1,7 @@
 package oxclient.framework;
 
+import oxclient.api.Skill;
+
 /**
  * Something the account builder works towards: a skill to a level ({@link SkillGoal}), a quest
  * ({@link QuestGoal}) -- and whatever comes next (a minigame, an achievement), by implementing this.
@@ -31,4 +33,10 @@ public interface Goal {
 
     /** Total experience it counts, for experience per hour in the history; -1 when it is not a skill. */
     default long experience() { return -1; }
+
+    /** The skill being trained, or null when this goal is not a skill goal. */
+    default Skill skill() { return null; }
+
+    /** The target level, or 0 when this goal is not a skill goal. */
+    default int target() { return 0; }
 }
